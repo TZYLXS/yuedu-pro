@@ -70,7 +70,9 @@
     <string name="fnreader_token_hint">存取權杖（FnReader 設定 → 手機接入）</string>
     <string name="fnreader_save">儲存</string>
     <string name="fnreader_test">測試連線</string>
-    <string name="fnreader_methods">選擇接入方式（點一行執行）</string>
+    <string name="fnreader_methods">一集菜單（點一行執行）</string>
+    <string name="fnreader_sync">同步</string>
+    <string name="fnreader_sync_idle">未同步：點「同步」拉取書架、進度與書源</string>
     <string name="other_setting_s">與功能相關的一些設定</string>
     <string name="about">關於</string>
     <string name="donate">捐贈</string>

@@ -72,7 +72,9 @@
     <string name="fnreader_token_hint">访问令牌（FnReader 设置 → 手机接入）</string>
     <string name="fnreader_save">保存</string>
     <string name="fnreader_test">测试连接</string>
-    <string name="fnreader_methods">选择接入方式（点一行执行）</string>
+    <string name="fnreader_methods">一集菜单（点一行执行）</string>
+    <string name="fnreader_sync">同步</string>
+    <string name="fnreader_sync_idle">未同步：点「同步」拉取书架、进度与书源</string>
     <string name="other_setting_s">与功能相关的一些设置</string>
     <string name="about">关于</string>
     <string name="donate">捐赠</string>

@@ -61,11 +61,17 @@ object AppUpdateGitHub : AppUpdate.AppUpdateInterface {
     }
 
     /**
-     * 从 tag 里取版本号，如 v1.0.24001 -> 24001
+     * 从 tag 里取出版本号，与 versionCode 同口径：
+     * v1.2 -> 1*10000 + 2*100 = 10200；v1.2.1 -> 10201；v1.3 -> 10300
      */
     private fun versionCodeOf(tag: String): Long {
-        val digits = Regex("(\\d+)$").find(tag)?.value ?: return 0L
-        return digits.toLongOrNull() ?: 0L
+        val parts = tag.removePrefix("v").removePrefix("V").trim()
+            .split(".").mapNotNull { it.toIntOrNull() }
+        if (parts.isEmpty()) return 0L
+        val major = parts.getOrElse(0) { 0 }
+        val minor = parts.getOrElse(1) { 0 }
+        val patch = parts.getOrElse(2) { 0 }
+        return major.toLong() * 10000 + minor.toLong() * 100 + patch.toLong()
     }
 
     /**

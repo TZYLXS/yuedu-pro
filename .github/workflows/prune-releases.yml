@@ -1,0 +1,58 @@
+name: prune-releases
+
+# 清理历史 Release：只保留 .github/prune-releases.json 里 keep 列出的 tag，
+# 其余 Release 连同 tag 一起删掉（用仓库自带 GITHUB_TOKEN，具备 contents: write）。
+# 触发方式：改这个 json 文件并 push（或手动 Run workflow）。
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/prune-releases.json'
+
+permissions:
+  contents: write
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Delete releases not in keep list
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          KEEP=$(python3 -c "import json;print(' '.join(json.load(open('.github/prune-releases.json'))['keep']))")
+          echo "keep tags: $KEEP"
+          gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate -q '.[].tag_name' > /tmp/tags.txt
+          echo "existing releases:"; cat /tmp/tags.txt
+          while read -r tag; do
+            [ -z "$tag" ] && continue
+            keepit=0
+            for k in $KEEP; do [ "$tag" = "$k" ] && keepit=1; done
+            if [ "$keepit" = "0" ]; then
+              echo "delete release + tag: $tag"
+              gh release delete "$tag" --yes --cleanup-tag
+            else
+              echo "keep: $tag"
+            fi
+          done < /tmp/tags.txt
+
+      - name: Delete tags not in keep list
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          KEEP=$(python3 -c "import json;print(' '.join(json.load(open('.github/prune-releases.json'))['keep']))")
+          gh api "repos/${GITHUB_REPOSITORY}/git/refs/tags" --paginate -q '.[].ref' | sed 's#refs/tags/##' > /tmp/refs.txt || true
+          cat /tmp/refs.txt || true
+          while read -r tag; do
+            [ -z "$tag" ] && continue
+            keepit=0
+            for k in $KEEP; do [ "$tag" = "$k" ] && keepit=1; done
+            if [ "$keepit" = "0" ]; then
+              echo "delete tag: $tag"
+              gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/${tag}" || true
+            fi
+          done < /tmp/refs.txt
