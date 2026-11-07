@@ -80,7 +80,23 @@
                     android:padding="8dp"
                     android:text="@string/fnreader_test" />
 
+                <io.legado.app.ui.widget.text.AccentTextView
+                    android:id="@+id/tv_sync"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:padding="8dp"
+                    android:text="@string/fnreader_sync" />
+
             </LinearLayout>
+
+            <TextView
+                android:id="@+id/tv_status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="4dp"
+                android:paddingBottom="6dp"
+                android:textSize="12sp"
+                tools:text="未同步" />
 
             <TextView
                 android:id="@+id/tv_methods_title"

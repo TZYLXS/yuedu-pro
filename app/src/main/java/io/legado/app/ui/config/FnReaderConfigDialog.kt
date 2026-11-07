@@ -11,36 +11,49 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import io.legado.app.R
 import io.legado.app.base.BaseDialogFragment
+import io.legado.app.data.appDb
 import io.legado.app.databinding.DialogFnreaderConfigBinding
 import io.legado.app.lib.dialogs.alert
+import io.legado.app.lib.dialogs.selector
 import io.legado.app.lib.theme.ThemeStore
 import io.legado.app.lib.theme.primaryColor
 import io.legado.app.ui.association.OnLineImportActivity
 import io.legado.app.ui.browser.WebViewActivity
 import io.legado.app.utils.getPrefString
+import io.legado.app.utils.openUrl
 import io.legado.app.utils.putPrefString
 import io.legado.app.utils.sendToClip
 import io.legado.app.utils.startActivity
 import io.legado.app.utils.toastOnUi
 import io.legado.app.utils.viewbindingdelegate.viewBinding
+import kotlinx.coroutines.flow.first
+import org.json.JSONArray
+import org.json.JSONObject
 import splitties.views.onClick
+import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * 接入 FnReader（飞牛 fnOS）服务器
  *
- * 把全部接入方式列在一个入口里，由用户自己选：
- * 一键导入书源 / 复制 JSON 地址 / 复制 legado:// 链接 / WebDAV / HTTP API / 网页书架 / 接入文档。
- * 服务器地址与访问令牌存默认 SharedPreferences。
+ * 设计对齐 FnReader 的「App 同步接口」：
+ * 一次 `GET /api/m/sync` 就能拿到书架、进度、书源概况，所以这个入口以同步为核心，
+ * 把导入书源、回传进度、WebDAV、HTTP API、网页书架、接入手册收在同一个菜单里。
  */
 class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config) {
 
     companion object {
-        const val KEY_PREF = "fnReaderConfig"
+        const val KEY_PREF = "fnReaderServerConfig"
         const val KEY_SERVER = "fnReaderServer"
         const val KEY_TOKEN = "fnReaderToken"
-        private const val DOC_URL = "https://github.com/TZYLXS/FnReader/blob/main/README.md"
+        private const val DOC_SYNC = "https://github.com/TZYLXS/FnReader/blob/main/docs/APP同步接口.md"
+        private const val DOC_APK = "https://github.com/TZYLXS/FnReader/blob/main/docs/APK接入.md"
+        private const val DOC_PHONE = "https://github.com/TZYLXS/FnReader/blob/main/docs/手机接入API.md"
+        private const val DOC_README = "https://github.com/TZYLXS/FnReader/blob/main/README.md"
     }
 
     private val binding by viewBinding(DialogFnreaderConfigBinding::bind)
@@ -61,8 +74,10 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
             savePrefs()
             toastOnUi("已保存服务器地址与令牌")
         }
-        binding.tvTest.onClick { testConnection() }
+        binding.tvTest.onClick { syncFromServer(silent = false) }
+        binding.tvSync.onClick { syncFromServer(silent = false) }
         binding.tvCancel.onClick { dismiss() }
+        binding.tvStatus.text = getString(R.string.fnreader_sync_idle)
         buildMethods()
     }
 
@@ -74,33 +89,33 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
     private fun buildMethods() {
         binding.listMethods.removeAllViews()
         addMethod(
-            "① 一键导入书源（推荐）",
-            "自动生成「飞牛书库」书源并弹出导入确认；之后搜书、目录、正文、封面都走飞牛"
-        ) { importBookSource() }
+            "① 导入书源（推荐的接法）",
+            "下载 /api/m/sources.json（Legado 数组格式）直接导入，导入后搜索、目录、正文都走飞牛"
+        ) { importSources() }
         addMethod(
-            "② 复制书源 JSON 地址",
-            "手动粘贴用：我的 → 书源管理 → 右上角菜单 → 网络导入"
-        ) { copyText(jsonUrl(serverBase() ?: return@addMethod), "已复制书源 JSON 地址") }
+            "② 复制同步接口地址",
+            "GET /api/m/sync?token=…，一次拿到书架、进度、书源概况，可给别的客户端用"
+        ) { copyText(syncUrl(serverBase() ?: return@addMethod), "已复制同步接口地址") }
         addMethod(
-            "③ 复制 legado:// 导入链接",
-            "发到手机或电脑上点一下即可唤起本 App 导入；注意这个链接不能粘进「网络导入」输入框"
-        ) { copyText(importUrl(serverBase() ?: return@addMethod), "已复制导入链接") }
+            "③ 回传阅读进度到飞牛",
+            "把本机书架上每本书的章节与位置 POST 到 /api/m/progress/batch，不在飞牛书架的书会被跳过"
+        ) { uploadProgress() }
         addMethod(
             "④ WebDAV（备份与恢复）",
-            "把书架备份挂到飞牛 /dav/backup/，/dav/books/ 可在文件管理器里浏览下载的 txt"
+            "把书架备份挂到飞牛 /dav/backup/；/dav/books/ 可浏览已下载的 txt"
         ) { showWebDav() }
         addMethod(
             "⑤ HTTP API（自建客户端）",
-            "查看 /api/m/* 接口地址与令牌，供脚本或第三方客户端读取书架、目录、正文"
+            "查看 /api/m/* 接口表与令牌，含 sync / shelf / toc / content / progress"
         ) { showHttpApi() }
         addMethod(
             "⑥ 打开飞牛阅读网页",
-            "用 App 内置浏览器直接打开 FnReader 网页书架"
+            "用 App 内置浏览器打开 FnReader 网页书架"
         ) { openWebShelf() }
         addMethod(
-            "⑦ 接入文档",
-            "GitHub 上的接入说明、接口表与常见问题"
-        ) { openDoc() }
+            "⑦ 接入手册",
+            "同步接口、APK 接入、手机接入 API 三份文档都在这里"
+        ) { showDocs() }
     }
 
     private fun addMethod(title: String, desc: String, action: () -> Unit) {
@@ -170,11 +185,13 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
         return base
     }
 
-    private fun jsonUrl(base: String): String =
-        "$base/api/m/booksource?token=${Uri.encode(token())}"
+    /** 同步接口（文档 1）：一次拿到书架、进度、书源概况 */
+    private fun syncUrl(base: String): String =
+        "$base/api/m/sync?token=${Uri.encode(token())}"
 
-    private fun importUrl(base: String): String =
-        "legado://import/bookSource?src=${Uri.encode(jsonUrl(base))}"
+    /** 书源数组（文档 2）：与 Legado 导出格式一致的数组，可直接导入 */
+    private fun sourcesUrl(base: String): String =
+        "$base/api/m/sources.json?all=1&token=${Uri.encode(token())}"
 
     private fun davUrl(base: String): String {
         val uri = Uri.parse(base)
@@ -188,12 +205,88 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
         toastOnUi(tip)
     }
 
+    // ---------------- 同步 ----------------
+
+    private fun syncFromServer(silent: Boolean) {
+        val base = requireServerAndToken() ?: return
+        execute {
+            request("GET", "$base/api/m/sync", token(), null)
+        }.onSuccess { result ->
+            val code = result.first
+            val body = result.second
+            if (code !in 200..299) {
+                binding.tvStatus.text = "同步失败：HTTP $code ${body.take(80)}"
+                if (!silent) toastOnUi("服务器返回 HTTP $code")
+                return@onSuccess
+            }
+            binding.tvStatus.text = summaryOf(body)
+        }.onError {
+            binding.tvStatus.text = "连接失败：${it.localizedMessage}"
+            toastOnUi("连接失败：${it.localizedMessage}")
+        }
+    }
+
+    /** 把 /api/m/sync 的响应压成几行概况 */
+    private fun summaryOf(body: String): String = runCatching {
+        val obj = JSONObject(body)
+        val sources = obj.optJSONObject("sources")
+        val time = obj.optLong("serverTime")
+        val timeText = if (time > 0) {
+            SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(time))
+        } else {
+            "-"
+        }
+        buildString {
+            append("已连接 ${obj.optString("app", "FnReader")} ${obj.optString("version", "")}")
+            append("　服务器时间 $timeText")
+            append("\n书架 ${obj.optInt("shelfCount")} 本")
+            append("　进度 ${obj.optInt("progressCount")} 条")
+            append("\n书源 ${sources?.optInt("total") ?: 0} 个")
+            append("（启用 ${sources?.optInt("enabled") ?: 0}）")
+            if (obj.optBoolean("incr")) append("　增量")
+        }
+    }.getOrElse { "同步成功，但没看懂返回内容：${body.take(80)}" }
+
     // ---------------- 各接入方式 ----------------
 
-    private fun importBookSource() {
+    private fun importSources() {
         val base = requireServerAndToken() ?: return
-        val uri = Uri.parse(importUrl(base))
-        startActivity<OnLineImportActivity> { data = uri }
+        val url = sourcesUrl(base)
+        startActivity<OnLineImportActivity> { data = Uri.parse(url) }
+    }
+
+    private fun uploadProgress() {
+        val base = requireServerAndToken() ?: return
+        execute {
+            val books = appDb.bookDao.flowAll().first()
+                .filter { it.bookUrl.isNotEmpty() && !it.bookUrl.startsWith("file:") }
+            val items = JSONArray()
+            books.forEach { book ->
+                items.put(
+                    JSONObject().apply {
+                        put("bookUrl", book.bookUrl)
+                        put("index", book.durChapterIndex)
+                        put("pos", book.durChapterPos)
+                        put("title", book.durChapterTitle ?: "")
+                    }
+                )
+            }
+            val payload = JSONObject().apply { put("items", items) }.toString()
+            items.length() to request("POST", "$base/api/m/progress/batch", token(), payload)
+        }.onSuccess { result ->
+            val localCount = result.first
+            val code = result.second.first
+            if (code in 200..299) {
+                val obj = runCatching { JSONObject(result.second.second) }.getOrNull()
+                val updated = obj?.optInt("updated") ?: 0
+                val total = obj?.optInt("total") ?: localCount
+                toastOnUi("已回传 $updated/$total 条进度（本机有 $localCount 本）")
+            } else {
+                toastOnUi("回传失败：HTTP $code ${result.second.second.take(60)}")
+            }
+        }.onError {
+            toastOnUi("回传失败：${it.localizedMessage}")
+        }
     }
 
     private fun showWebDav() {
@@ -223,12 +316,14 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
             setTitle("HTTP API")
             setMessage(
                 "接口基址：$apiBase\n请求头：X-Api-Token: $tk\n\n" +
-                    "GET /shelf 书架\n" +
-                    "GET /search?key= 搜索\n" +
-                    "GET /toc?url= 目录\n" +
-                    "GET /content?url=&index= 正文\n" +
-                    "GET /cover?url= 封面\n" +
-                    "POST /progress 进度"
+                    "GET  /sync 书架+进度+书源（可带 since 增量、full=1 带完整规则）\n" +
+                    "GET  /sources.json 书源数组（?all=1 含停用）\n" +
+                    "GET  /shelf 书架\n" +
+                    "GET  /toc?url= 目录\n" +
+                    "GET  /content?url=&index= 正文\n" +
+                    "GET  /cover?url= 封面\n" +
+                    "POST /progress 单条进度\n" +
+                    "POST /progress/batch 批量进度"
             )
             positiveButton("复制接口地址") { requireContext().sendToClip(apiBase) }
             okButton()
@@ -243,42 +338,57 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
         }
     }
 
-    private fun openDoc() {
+    private fun showDocs() {
+        val docs = arrayListOf(
+            "App 同步接口（sync/sources.json/进度）",
+            "APK 接入（书源导入与接口对应）",
+            "手机接入 API（/api/m/* 全表）",
+            "README（总体说明）"
+        )
+        val urls = arrayListOf(DOC_SYNC, DOC_APK, DOC_PHONE, DOC_README)
+        requireContext().selector(docs) { _, index ->
+            openInBrowser(urls[index])
+        }
+    }
+
+    private fun openInBrowser(url: String) {
         try {
-            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(DOC_URL)))
+            requireContext().openUrl(Uri.parse(url))
         } catch (e: Exception) {
             toastOnUi("没有可用的浏览器：${e.localizedMessage}")
         }
     }
 
-    // ---------------- 连通性测试 ----------------
+    // ---------------- 网络请求 ----------------
 
-    private fun testConnection() {
-        val base = requireServerAndToken(needToken = false) ?: return
-        val tk = token()
-        execute {
-            var conn: HttpURLConnection? = null
-            try {
-                conn = URL("$base/api/m/info").openConnection() as HttpURLConnection
-                conn.connectTimeout = 6000
-                conn.readTimeout = 8000
-                conn.setRequestProperty("X-Api-Token", tk)
-                val code = conn.responseCode
-                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-                val body = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-                code to body.take(160)
-            } finally {
-                conn?.disconnect()
+    /** @return HTTP 状态码 to 响应文本（前 400 字用于提示） */
+    private fun request(
+        method: String,
+        url: String,
+        token: String,
+        jsonBody: String?
+    ): Pair<Int, String> {
+        var conn: HttpURLConnection? = null
+        try {
+            conn = URL(url).openConnection() as HttpURLConnection
+            conn.requestMethod = method
+            conn.connectTimeout = 6000
+            conn.readTimeout = 12000
+            conn.setRequestProperty("X-Api-Token", token)
+            conn.setRequestProperty("Accept", "application/json")
+            if (jsonBody != null) {
+                conn.doOutput = true
+                conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                (conn.outputStream as OutputStream).use { out ->
+                    out.write(jsonBody.toByteArray(Charsets.UTF_8))
+                }
             }
-        }.onSuccess { result ->
-            val code = result.first
-            if (code in 200..299) {
-                toastOnUi("连接成功（HTTP $code）")
-            } else {
-                toastOnUi("服务器返回 HTTP $code：${result.second}")
-            }
-        }.onError {
-            toastOnUi("连接失败：${it.localizedMessage}")
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val body = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+            return code to body
+        } finally {
+            conn?.disconnect()
         }
     }
 

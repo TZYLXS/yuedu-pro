@@ -58,7 +58,7 @@ android {
         applicationId "io.legado.pro"
         minSdk 24
         targetSdk 33
-        versionCode 24004
+        versionCode 24005
         versionName version
         multiDexEnabled true
         ndk {

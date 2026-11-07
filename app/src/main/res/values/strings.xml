@@ -73,7 +73,9 @@
     <string name="fnreader_token_hint">Access token (FnReader → Settings → Mobile access)</string>
     <string name="fnreader_save">Save</string>
     <string name="fnreader_test">Test</string>
-    <string name="fnreader_methods">Choose how to connect</string>
+    <string name="fnreader_methods">One menu · pick what you need</string>
+    <string name="fnreader_sync">Sync</string>
+    <string name="fnreader_sync_idle">Not synced yet — tap Sync to pull shelf, progress and book sources</string>
     <string name="other_setting_s">Some function-related settings</string>
     <string name="about">About</string>
     <string name="donate">Donations</string>

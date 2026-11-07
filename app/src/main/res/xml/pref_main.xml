@@ -12,6 +12,13 @@
         app:iconSpaceReserved="false" />
 
     <io.legado.app.lib.prefs.Preference
+        android:icon="@drawable/ic_cfg_web"
+        android:key="fnReaderServer"
+        android:summary="@string/fnreader_entry_summary"
+        android:title="@string/fnreader_entry"
+        app:iconSpaceReserved="false" />
+
+    <io.legado.app.lib.prefs.Preference
         android:icon="@drawable/ic_cfg_source"
         android:key="txtTocRuleManage"
         android:summary="@string/config_txt_toc_rule"

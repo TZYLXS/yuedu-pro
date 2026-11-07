@@ -132,7 +132,6 @@ class OtherConfigFragment : PreferenceFragment(),
             PreferKey.clearWebViewData -> clearWebViewData()
             "localPassword" -> alertLocalPassword()
             PreferKey.shrinkDatabase -> shrinkDatabase()
-            FnReaderConfigDialog.KEY_PREF -> showDialogFragment<FnReaderConfigDialog>()
         }
         return super.onPreferenceTreeClick(preference)
     }
