@@ -66,6 +66,14 @@
     <string name="theme_setting">Theme settings</string>
     <string name="theme_setting_s">Some settings related to interface or color</string>
     <string name="other_setting">Other settings</string>
+    <string name="fnreader_server">FnReader server</string>
+    <string name="fnreader_entry">Connect to FnReader server</string>
+    <string name="fnreader_entry_summary">FeiNiu library: one-tap book source import, WebDAV, HTTP API and more</string>
+    <string name="fnreader_addr_hint">Server address, e.g. http://192.168.5.110:5666/app/legado-web</string>
+    <string name="fnreader_token_hint">Access token (FnReader → Settings → Mobile access)</string>
+    <string name="fnreader_save">Save</string>
+    <string name="fnreader_test">Test</string>
+    <string name="fnreader_methods">Choose how to connect</string>
     <string name="other_setting_s">Some function-related settings</string>
     <string name="about">About</string>
     <string name="donate">Donations</string>

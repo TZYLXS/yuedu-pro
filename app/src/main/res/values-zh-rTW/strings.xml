@@ -65,6 +65,14 @@
     <string name="theme_setting">主題設定</string>
     <string name="theme_setting_s">與介面/顏色相關的一些設定</string>
     <string name="other_setting">其它設定</string>
+    <string name="fnreader_server">FnReader 伺服器</string>
+    <string name="fnreader_entry">接入 FnReader 伺服器</string>
+    <string name="fnreader_entry_summary">飛牛書庫：一鍵匯入書源、WebDAV 備份、HTTP API 等方式自選</string>
+    <string name="fnreader_addr_hint">伺服器位址，如 http://192.168.5.110:5666/app/legado-web</string>
+    <string name="fnreader_token_hint">存取權杖（FnReader 設定 → 手機接入）</string>
+    <string name="fnreader_save">儲存</string>
+    <string name="fnreader_test">測試連線</string>
+    <string name="fnreader_methods">選擇接入方式（點一行執行）</string>
     <string name="other_setting_s">與功能相關的一些設定</string>
     <string name="about">關於</string>
     <string name="donate">捐贈</string>

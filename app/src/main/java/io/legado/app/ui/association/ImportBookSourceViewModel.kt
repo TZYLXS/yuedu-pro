@@ -193,14 +193,19 @@ class ImportBookSourceViewModel(app: Application) : BaseViewModel(app) {
             } else {
                 url(url)
             }
-        }.unCompress {
-            GSON.fromJsonArray<BookSource>(it).getOrThrow().let { list ->
-                val source = list.firstOrNull() ?: return@let
-                if (source.bookSourceUrl.isEmpty()) {
-                    throw NoStackTraceException("不是书源")
-                }
-                allSources.addAll(list)
+        }.unCompress { inputStream ->
+            // 官方书源包是数组；FnReader 这类自建服务也可能只给一个对象，两种都收
+            val text = String(inputStream.readBytes(), Charsets.UTF_8).trim()
+            val list = when {
+                text.isJsonArray() -> GSON.fromJsonArray<BookSource>(text).getOrThrow()
+                text.isJsonObject() -> listOf(GSON.fromJsonObject<BookSource>(text).getOrThrow())
+                else -> throw NoStackTraceException(context.getString(R.string.wrong_format))
             }
+            val source = list.firstOrNull() ?: throw NoStackTraceException("不是书源")
+            if (source.bookSourceUrl.isEmpty()) {
+                throw NoStackTraceException("不是书源")
+            }
+            allSources.addAll(list)
         }
     }
 
