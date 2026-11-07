@@ -162,6 +162,15 @@ class ImportBookSourceViewModel(app: Application) : BaseViewModel(app) {
                     importSourceUrl(mText)
                 }
 
+                mText.startsWith("legado://") || mText.startsWith("legado:", true) -> {
+                    importLegadoLink(mText)
+                }
+
+                // 只填了「主机:端口/路径」的情况，补上协议再走网络导入
+                IP_HOST_REGEX.matches(mText) -> {
+                    importSourceUrl("http://$mText")
+                }
+
                 mText.isUri() -> {
                     val uri = Uri.parse(mText)
                     uri.inputStream(context).getOrThrow().use { inputS ->
@@ -185,6 +194,24 @@ class ImportBookSourceViewModel(app: Application) : BaseViewModel(app) {
         }
     }
 
+    private suspend fun importLegadoLink(link: String) {
+        val uri = Uri.parse(link)
+        val path = uri.path.orEmpty()
+        val src = uri.getQueryParameter("src")
+        when {
+            !path.contains("bookSource", true) ->
+                throw NoStackTraceException("这条链接不是书源导入链接（$path），请用书源类链接")
+            src.isNullOrBlank() ->
+                throw NoStackTraceException("链接里没有 src 参数")
+            src.startsWith("legado:", true) ->
+                throw NoStackTraceException("链接里的 src 还是导入链接，无法连续解析")
+            src.isAbsUrl() ->
+                importSourceUrl(src)
+            else ->
+                throw NoStackTraceException("src 不是可下载地址：$src")
+        }
+    }
+
     private suspend fun importSourceUrl(url: String) {
         okHttpClient.newCallResponseBody {
             if (url.endsWith("#requestWithoutUA")) {
@@ -199,7 +226,12 @@ class ImportBookSourceViewModel(app: Application) : BaseViewModel(app) {
             val list = when {
                 text.isJsonArray() -> GSON.fromJsonArray<BookSource>(text).getOrThrow()
                 text.isJsonObject() -> listOf(GSON.fromJsonObject<BookSource>(text).getOrThrow())
-                else -> throw NoStackTraceException(context.getString(R.string.wrong_format))
+                text.startsWith("<") || text.contains("<html", true) ->
+                    throw NoStackTraceException("地址返回的是网页而不是书源 JSON，多为缺少令牌或未登录，请换带 token 的地址")
+                text.isEmpty() ->
+                    throw NoStackTraceException("地址返回了空内容：$url")
+                else ->
+                    throw NoStackTraceException("返回内容不是书源 JSON（前 60 字）：${text.take(60)}")
             }
             val source = list.firstOrNull() ?: throw NoStackTraceException("不是书源")
             if (source.bookSourceUrl.isEmpty()) {
@@ -220,6 +252,11 @@ class ImportBookSourceViewModel(app: Application) : BaseViewModel(app) {
             }
             successLiveData.postValue(allSources.size)
         }
+    }
+
+    companion object {
+        // 形如 192.168.5.110:1122/api/m/booksource 这种缺协议的地址
+        private val IP_HOST_REGEX = Regex("""^\d{1,3}(\.\d{1,3}){3}(:\d+)?(/\S*)?$""")
     }
 
 }
