@@ -12,6 +12,7 @@ import android.widget.TextView
 import io.legado.app.R
 import io.legado.app.base.BaseDialogFragment
 import io.legado.app.data.appDb
+import io.legado.app.data.entities.Book
 import io.legado.app.databinding.DialogFnreaderConfigBinding
 import io.legado.app.lib.dialogs.alert
 import io.legado.app.lib.dialogs.selector
@@ -57,6 +58,9 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
     }
 
     private val binding by viewBinding(DialogFnreaderConfigBinding::bind)
+
+    /** 探测成功后记住可用的地址，后续各菜单直接复用，避免每次再试一遍 */
+    private var resolvedBase: String? = null
 
     override fun onStart() {
         super.onStart()
@@ -155,34 +159,50 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
     private fun token(): String = binding.editToken.text?.toString()?.trim().orEmpty()
 
     /**
-     * 规范化服务器地址：缺协议补 http://，只填了主机时补上飞牛的网关路径 /app/legado-web
-     * 例：192.168.5.110:5666 → http://192.168.5.110:5666/app/legado-web
+     * 规范化服务器地址：缺协议补 http://；只保留用户填的端口与路径，不擅自拼 /app/legado-web
+     * （FnReader 的手机 API 走它自己监听的 1122，网页代理的 /app/legado-web 前缀对 API 不适用）
      */
     private fun serverBase(): String? {
         var s = rawServer()
         if (s.isEmpty()) {
-            toastOnUi("先填服务器地址，例如 http://192.168.5.110:5666/app/legado-web")
+            toastOnUi("先填服务器地址，例如 http://192.168.5.110:1122")
             return null
         }
         if (!s.startsWith("http://", true) && !s.startsWith("https://", true)) {
             s = "http://$s"
         }
         s = s.trimEnd('/')
-        val path = Uri.parse(s).path.orEmpty().trim('/')
-        if (path.isEmpty()) {
-            s = "$s/app/legado-web"
-        }
         savePrefs()
         return s
     }
 
+    /**
+     * 依次尝试的地址：用户填的 → 同主机的 1122（FnReader 默认端口）→ 同主机 + /app/legado-web
+     * 只填了 5666 的网页代理地址也能连上，因为会自动退化到 1122 去探。
+     */
+    private fun candidateBases(): List<String> {
+        val base = serverBase() ?: return emptyList()
+        val list = arrayListOf(base)
+        runCatching {
+            val uri = Uri.parse(base)
+            val host = uri.host ?: return@runCatching
+            val scheme = uri.scheme ?: "http"
+            val port = if (uri.port > 0) uri.port else 80
+            if (port != 1122) list.add("$scheme://$host:1122")
+            val hasAppPath = base.contains("/app/", true)
+            if (!hasAppPath) list.add("$base/app/legado-web")
+        }
+        return list
+    }
+
     private fun requireServerAndToken(needToken: Boolean = true): String? {
-        val base = serverBase() ?: return null
+        val bases = candidateBases()
+        if (bases.isEmpty()) return null
         if (needToken && token().isEmpty()) {
             toastOnUi("先填访问令牌（FnReader 设置 → 手机接入 里那个）")
             return null
         }
-        return base
+        return resolvedBase ?: bases.first()
     }
 
     /** 同步接口（文档 1）：一次拿到书架、进度、书源概况 */
@@ -207,22 +227,145 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
 
     // ---------------- 同步 ----------------
 
+    private class SyncOutcome(
+        val okBase: String?,
+        val code: Int,
+        val body: String,
+        val triedUrl: String,
+        val merged: String?
+    )
+
     private fun syncFromServer(silent: Boolean) {
-        val base = requireServerAndToken() ?: return
+        val bases = candidateBases()
+        if (bases.isEmpty()) return
+        if (token().isEmpty()) {
+            toastOnUi("先填访问令牌（FnReader 设置 → 手机接入 里那个）")
+            return
+        }
+        // 先给个反馈，避免点下去像没反应
+        binding.tvStatus.text = "同步中…（正在连接 ${bases.first()}）"
         execute {
-            request("GET", "$base/api/m/sync", token(), null)
-        }.onSuccess { result ->
-            val code = result.first
-            val body = result.second
-            if (code !in 200..299) {
-                binding.tvStatus.text = "同步失败：HTTP $code ${body.take(80)}"
-                if (!silent) toastOnUi("服务器返回 HTTP $code")
-                return@onSuccess
+            var lastCode = 0
+            var lastBody = ""
+            var lastUrl = bases.first()
+            var okBase: String? = null
+            var merged: String? = null
+            for (base in bases) {
+                val result = runCatching { request("GET", syncUrl(base), token(), null) }.getOrNull()
+                if (result == null) {
+                    lastUrl = base
+                    lastBody = "连接不上"
+                    continue
+                }
+                lastCode = result.first
+                lastBody = result.second
+                lastUrl = base
+                if (result.first in 200..299 && result.second.trim().startsWith("{")) {
+                    okBase = base
+                    // 书架、进度真正落到本地库（书架上没有的补进去，进度比本地新才覆盖）
+                    merged = mergeShelfAndProgress(result.second)
+                    break
+                }
             }
-            binding.tvStatus.text = summaryOf(body)
+            SyncOutcome(okBase, lastCode, lastBody, lastUrl, merged)
+        }.onSuccess { result ->
+            val okBase = result.okBase
+            if (okBase != null) {
+                resolvedBase = okBase
+                binding.editServer.setText(okBase)
+                putPrefString(KEY_SERVER, okBase)
+                val summary = summaryOf(result.body)
+                binding.tvStatus.text = if (result.merged != null) "$summary\n${result.merged}" else summary
+                if (!silent) toastOnUi(result.merged ?: "同步完成")
+            } else {
+                binding.tvStatus.text = "同步失败：${explain(result.body)}\n试过：${result.triedUrl}"
+                if (!silent) toastOnUi("同步失败：${explain(result.body)}")
+            }
         }.onError {
             binding.tvStatus.text = "连接失败：${it.localizedMessage}"
             toastOnUi("连接失败：${it.localizedMessage}")
+        }
+    }
+
+    /**
+     * 把 /api/m/sync 的 shelf 与 progress 合并进本地书架：
+     * 书架上没有的书补进去；本地进度比服务器旧才覆盖（服务器时间更大的为准）。
+     */
+    private fun mergeShelfAndProgress(body: String): String? {
+        val obj = runCatching { JSONObject(body) }.getOrNull() ?: return null
+        val shelf = obj.optJSONArray("shelf") ?: JSONArray()
+        val progress = obj.optJSONArray("progress") ?: JSONArray()
+
+        val remoteProgress = HashMap<String, JSONObject>()
+        for (i in 0 until progress.length()) {
+            val p = progress.optJSONObject(i) ?: continue
+            val url = p.optString("bookUrl")
+            if (url.isNotEmpty()) remoteProgress[url] = p
+        }
+
+        var added = 0
+        var updated = 0
+        for (i in 0 until shelf.length()) {
+            val s = shelf.optJSONObject(i) ?: continue
+            val url = s.optString("bookUrl")
+            if (url.isEmpty()) continue
+            val shelfTime = s.optLong("durChapterTime", 0L)
+            val local = appDb.bookDao.getBook(url)
+            if (local == null) {
+                val book = Book(
+                    bookUrl = url,
+                    origin = s.optString("origin"),
+                    originName = s.optString("originName")
+                )
+                book.name = s.optString("name")
+                book.author = s.optString("author")
+                book.kind = s.optString("kind").ifEmpty { null }
+                book.coverUrl = s.optString("coverUrl").ifEmpty { null }
+                book.intro = s.optString("intro").ifEmpty { null }
+                book.latestChapterTitle = s.optString("lastChapter").ifEmpty { null }
+                book.totalChapterNum = s.optInt("totalChapterNum", 0)
+                book.latestChapterTime = if (shelfTime > 0) shelfTime else System.currentTimeMillis()
+                book.durChapterTitle = s.optString("durChapterTitle").ifEmpty { null }
+                book.durChapterIndex = s.optInt("durChapterIndex", 0)
+                book.durChapterPos = s.optInt("durChapterPos", 0)
+                book.durChapterTime = if (shelfTime > 0) shelfTime else 0L
+                book.save()
+                added++
+                continue
+            }
+            val p = remoteProgress[url]
+            val remoteTime = maxOf(shelfTime, p?.optLong("time", 0L) ?: 0L)
+            if (remoteTime > local.durChapterTime) {
+                local.durChapterIndex =
+                    p?.optInt("index", local.durChapterIndex) ?: s.optInt("durChapterIndex", local.durChapterIndex)
+                local.durChapterPos =
+                    p?.optInt("pos", local.durChapterPos) ?: s.optInt("durChapterPos", local.durChapterPos)
+                val title = p?.optString("title").orEmpty().ifEmpty { s.optString("durChapterTitle") }
+                if (title.isNotEmpty()) local.durChapterTitle = title
+                local.durChapterTime = remoteTime
+                local.save()
+                updated++
+            }
+        }
+        // 只在 progress 里出现、书架上没有的书（例如服务器已删书）：不新建，跳过
+
+        return "新增 $added 本　更新 $updated 条进度（本地书架 ${appDb.bookDao.all.size} 本）"
+    }
+
+    /**
+     * 服务端出错时可能回一段纯文本（如 invalid token），翻成用户能照着做的中文
+     */
+    private fun explain(body: String): String {
+        val plain = body.trim()
+        val lower = plain.lowercase()
+        return when {
+            lower.contains("invalid token") || plain.contains("token 无效") ||
+                plain.contains("token无效") || lower.contains("unauthorized") ->
+                "令牌不对，或者填的是飞牛的网页代理地址。FnReader 手机接口在应用自己的端口：http://IP:1122"
+            lower.contains("<html") || plain.startsWith("<") ->
+                "地址返回的是网页。这里只填 http://IP:端口（默认 1122）"
+            plain.isEmpty() -> "服务器没有返回内容（可能是端口不对或服务没起来）"
+            else -> plain.take(80)
         }
     }
 
@@ -245,7 +388,7 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
             append("（启用 ${sources?.optInt("enabled") ?: 0}）")
             if (obj.optBoolean("incr")) append("　增量")
         }
-    }.getOrElse { "同步成功，但没看懂返回内容：${body.take(80)}" }
+    }.getOrElse { "服务器返回的不是同步 JSON：${explain(body)}" }
 
     // ---------------- 各接入方式 ----------------
 
