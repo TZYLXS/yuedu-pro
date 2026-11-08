@@ -14,8 +14,8 @@
 
 | 产物 | 适用设备 | 说明 |
 | --- | --- | --- |
-| `yuedu_pro_app_1.7-arm64.apk` | 2017 年后的手机 / 平板 / 电视盒子（绝大多数） | arm64-v8a，64 位原生库 |
-| `yuedu_pro_app_1.7-armv7.apk` | 老一些的 32 位设备、部分低端盒子 | armeabi-v7a，兼容性优先 |
+| `yuedu_pro_app_1.8-arm64.apk` | 2017 年后的手机 / 平板 / 电视盒子（绝大多数） | arm64-v8a，64 位原生库 |
+| `yuedu_pro_app_1.8-armv7.apk` | 老一些的 32 位设备、部分低端盒子 | armeabi-v7a，兼容性优先 |
 
 不确定选哪个：先装 arm64，闪退或提示「应用未安装」再换 armv7。
 两者 Java 侧完全一致，只差 APK 里打包的原生库（.so）。
@@ -28,7 +28,7 @@
 | --- | --- |
 | 包名 / 应用名 | `io.legado.pro` / 阅读Pro |
 | minSdk / targetSdk | 24 / 33 |
-| versionCode | 10700（1.7） |
+| versionCode | 10800（1.8） |
 | 签名 | v1 (JAR) + v2 都在包里。`jarsigner -verify` 对 v1 报「jar 已验证」；`apksigner` 在 minSdk ≥ 24 时只校验 v2，会把 v1 显示成 false |
 | 依赖底座 | Legado `3.23.110211` |
 

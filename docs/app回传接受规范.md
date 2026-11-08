@@ -1,7 +1,7 @@
 # APP 回传接受规范
 
 > 服务端依据：FnReader `1.9.1`（`docs/APP同步接口.md` 第 4 / 9 / 11 / 13 / 14 章）
-> 客户端：阅读Pro `1.7`（`io.legado.pro`）、安卓4.0 版 `1.7`（`io.legado.api19`）
+> 客户端：阅读Pro `1.8`（`io.legado.pro`）、安卓4.0 版 `1.8`（`io.legado.api19`）
 > 本文写的是**服务端接收侧**的规矩：APP 往飞牛回传什么、字段怎么填、什么会被拒、什么会被合并。
 
 ## 0 通用约定
@@ -63,7 +63,8 @@ POST /api/m/books      X-Api-Token: …
 | `coverMime` | — | string | `image/png` / `image/jpeg` / `image/webp` / `image/gif`，与 `coverData` 配对 |
 | `coverData` | — | string | 封面 base64（可带 `data:image/png;base64,` 前缀，也可纯 base64）；落盘后该书 `coverUrl` 自动改指向 `/api/covers/<文件名>` |
 | `intro` | — | string | 简介，建议 ≤ 500 字 |
-| `originName` | — | string | 来源名，APP 推的统一写 `手机端` |
+| `origin` | ✅ | string | **书源真实地址**，取 `BookSource.bookSourceUrl`（如 `http://www.qiushu.info`）。服务端靠它取目录与正文，空 = 这本书没有来源（见 §10） |
+| `originName` | — | string | 该源的 `bookSourceName`（如 `🎉 狗狗书籍`）。**不要写 `手机端` 之类占位** |
 | `totalChapterNum` | — | int | 总章节数 |
 | `index` | — | int | 当前读到的章节下标（从 0 起） |
 | `title` | — | string | 当前章节标题 |
@@ -151,7 +152,7 @@ POST /api/m/sources      X-Api-Token: …
 - 1.10.0 起新增任务类型 `rank`（让手机代抓起点榜单）：本客户端只执行 `search` / `toc` / `content`，收到 `rank` 直接回 `{ok:false,error:"不支持的任务"}`，服务端会自动降级到纵横 / 17K
 - 1.10.0 新增 `GET /api/daily`（每日推荐，6 小时缓存，`stale:true` 表示用的是旧结果），与回传无关，APP 只读
 
-## 6 本项目 1.6 / 1.7 的落实方式
+## 6 本项目 1.6 / 1.7 / 1.8 的落实方式
 
 「③ 全部同步到飞牛书架」按钮 = 一次把 **推书 + 回传进度** 跑完：
 
@@ -221,3 +222,28 @@ POST /api/m/sources/sync                   X-Api-Token: …
 - **实测坑（重要）**：把「本机全量 + `since: 0`」推给 `POST /api/m/sources/sync`，服务端会当成整库快照，把它自己那份里**本机没有的源删掉**（本机 835 条 + 服务端 1253 条 → 服务端掉到 995，丢 258 条；靠 `backup/sources-*.json` + `POST /api/m/sources` 才补回）
   - 首次接入改用 §4 的 `POST /api/m/sources`（按 `bookSourceUrl` 合并，幂等安全），只把 `GET …/sync?since=<now>` 返回的 `serverTime` 记成下次的 `since`
   - 之后只在本地确有 `lastUpdateTime > since` 的改动时 POST 增量；本地没改动就只 GET，不再每次重推上千条源
+
+## 10 1.8：origin 必须是真实书源地址（客户端侧修复，服务端 ≥ 1.11.1 才软兜底）
+
+1.7 出过一次真实事故：客户端加书时 `origin` 传空、`originName` 传 `手机端`，服务端靠 `book.origin`
+取目录与正文，结果网页端打开提示「没有书源」、目录空、正文读不出。1.8 起按下列规矩发请求：
+
+| 项 | 规定 |
+| --- | --- |
+| `origin` | **必填**，值 = 该书源的 `BookSource.bookSourceUrl`（如 `http://www.qiushu.info`）。禁止空串、禁止 `手机端` / `本地` / `未知` 之类占位 |
+| `originName` | 该源的 `bookSourceName`（如 `🎉 狗狗书籍`）。不要写 `手机端` |
+| `bookUrl` | 必须是书籍详情页。搜索页 / 临时跳转（`/search`、`?q=`、`&q=`、`?wd=`、`?keyword=`、`/so/`、`s?ie=`）不要推 |
+| 拿不到 origin | 用 `bookUrl` 的 host 去书源列表匹配 `bookSourceUrl` 的 host，命中就填（多源取同名那条）；再退按源名唯一匹配；都不中才留空 |
+| `POST /api/m/cache` | 除 `origin` 外必须带 `layout:"legado"`、`chapters[].file`、`chapters[].raw`（`.nb` 原文，不做 `Html.fromHtml` 之类处理） |
+| 书源改/删 | 每次都写 `lastUpdateTime = System.currentTimeMillis()`；删除也带；服务端「时间戳大的赢、相等服务端赢」，`pull` 回本地要覆盖 |
+
+### 自测清单（1.8 已逐条跑过）
+
+- [x] 加书后看 `POST /api/m/books` 的 `origin` 是否等于书源 `bookSourceUrl`（服务端书架 9 本逐本核对，全部一致）
+- [x] 网页端 / `GET /api/m/toc` + `/api/m/content` 打开该书：目录非空、能翻正文（6 本 5227/858/12/1674/1375/922 章）
+- [x] `POST /api/m/cache` 的 `chapters[].raw` 是 `.nb` 原文（NAS `raw/*.nb` 与本地一致，未转义、未去标签）
+- [x] 同步的书网页端有封面（`coverData` 有值，NAS `covers/*.jpg`，`coverUrl` 改指 `/api/covers/`）
+- [x] 改一次书源 → 一轮同步 → 网页端出现同样改动；再让服务端改 → 本地被覆盖（`lastUpdateTime` 双向生效）
+
+> 注：`gaysay.com` 这类纯 JS 渲染的站，详情页没有章节链接，书源规则取不到目录，
+> 客户端与服务端表现一致（只有 1 章且无正文），属于书源规则问题，不是 origin 问题。

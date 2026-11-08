@@ -33,13 +33,18 @@ import io.legado.app.utils.sendToClip
 import io.legado.app.utils.startActivity
 import io.legado.app.utils.toastOnUi
 import io.legado.app.utils.viewbindingdelegate.viewBinding
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import org.json.JSONArray
 import org.json.JSONObject
 import splitties.views.onClick
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.OutputStream
 import java.net.HttpURLConnection
+import java.net.URI
 import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -75,8 +80,19 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
         /** 封面 base64 的内联上限，超过就不带图（服务端单张上限 8 MB） */
         private const val MAX_COVER_BYTES = 3L * 1024 * 1024
 
+        /** 每轮同步最多现场下载几张在线封面（防几十本书把同步拖成几分钟） */
+        private const val MAX_COVER_FETCH = 20
+
+        /** 下载封面用的 UA：部分源站会拦空 UA / 无 Referer 的请求 */
+        private const val COVER_UA =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +
+                "Chrome/120.0 Safari/537.36"
+
         /** 书源双向同步的游标（服务端 serverTime，毫秒），下次按它算增量 */
         const val KEY_SOURCES_SINCE = "fnReaderSourcesSinceMs"
+
+        /** 上次同步成功时本机书源地址快照（JSON 数组），用来识别本机删掉的源并按 §17 推 deleted */
+        private const val KEY_SOURCES_SNAPSHOT = "fnReaderSourcesSnapshot"
 
         /** 缓存上传单次请求体上限（文档 §16.5：服务端 32 MB，留一点余量） */
         private const val MAX_CACHE_REQUEST = 30L * 1024 * 1024
@@ -140,6 +156,7 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
         addMethod(
             "② 全部同步到飞牛书架（新书自动建、重名跳过）",
             "本机书架上每本书都推给飞牛：飞牛没有的书自动建进书架（POST /api/m/books，带封面与简介），"
+                    + "origin 填书源的真实地址（bookSourceUrl）、originName 填源名，服务端靠它取目录和正文；"
                     + "再把章节与位置回传（POST /api/m/progress/batch）；书名相同的不重复添加，"
                     + "封面一并回传（本机缓存图转 base64 落到 NAS 的 covers/），飞牛那边缺封面的会顺手补上"
                     + "（回传字段见 docs《app回传接受规范》）"
@@ -173,8 +190,9 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
         addMethod(
             "⑧ 上传本机缓存到飞牛（网页离线读正文）",
             "把已经缓存过的章节原文（book_cache 里的 .nb 文件）连同章节图片、封面原样推给飞牛"
-                    + "（POST /api/m/cache，文档 §16），NAS 自己转码成段落文本存进 cache/<书名>/，"
-                    + "之后网页阅读直接读本地文件、不再回头访问书源；整本一次上传，超过 30 MB 的本子跳过"
+                    + "（POST /api/m/cache，文档 §16，layout:legado + chapters[].file/raw + origin），"
+                    + "NAS 自己转码成段落文本存进 cache/<书名>/，之后网页阅读直接读本地文件、不再回头访问书源；"
+                    + "即使 origin 补不上，缓存也能离线读正文；整本一次上传，超过 30 MB 的本子跳过"
         ) { uploadCache() }
         addMethod(
             "⑨ 书源双向同步（最后一次修改为准）",
@@ -592,11 +610,18 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
                 if (name.isNotEmpty()) shelfNames.add(normName(name))
             }
 
+            val sourceIndex = buildSourceIndex()
             val local = appDb.bookDao.flowAll().first()
                 .filter { it.bookUrl.isNotEmpty() && !it.bookUrl.startsWith("file:") && it.name.isNotBlank() }
             val picked = LinkedHashMap<String, Book>()
             var localDup = 0
+            var badUrl = 0
             for (book in local) {
+                // 搜索页 / 临时跳转不是书籍详情页，推上去服务端也取不到目录（文档 13.1）
+                if (looksLikeSearchUrl(book.bookUrl)) {
+                    badUrl++
+                    continue
+                }
                 val key = normName(book.name)
                 if (picked.containsKey(key)) {
                     localDup++
@@ -604,6 +629,9 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
                 }
                 picked[key] = book
             }
+            // 一条书源都匹配不到的书，origin 只能留空（文档 13.1 允许，但网页端取不到目录）
+            var noOrigin = 0
+            for (b in picked.values) if (sourceIndex.resolve(b).first.isEmpty()) noOrigin++
 
             val toPush = ArrayList<Book>()
             val toProgress = ArrayList<Book>()
@@ -628,13 +656,15 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
                 }
             }
 
+            // 源站图片多带防盗链，网页端直接引用常是空白：先下载一份 base64 一起推上去
+            val coverData = fetchCoverData(toPush)
             var added = 0
             var shelfTotal = shelf.length()
             if (toPush.isNotEmpty()) {
                 // 文档 14.5：单批 ≤ 20 本；带 base64 封面时请求体会变大，更该分批
                 for (batch in toPush.chunked(PUSH_BATCH)) {
                     val arr = JSONArray()
-                    batch.forEach { arr.put(pushJson(it)) }
+                    batch.forEach { arr.put(pushJson(it, sourceIndex, coverData[it.bookUrl])) }
                     val payload = JSONObject().apply { put("books", arr) }.toString()
                     val push = request("POST", "$base/api/m/books", token(), payload)
                     if (push.first !in 200..299) throw IllegalStateException("推书失败：${explain(push.second)}")
@@ -679,7 +709,7 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
                     if (retry.isNotEmpty()) {
                         for (batch in retry.chunked(PUSH_BATCH)) {
                             val arr = JSONArray()
-                            batch.forEach { arr.put(pushJson(it)) }
+                            batch.forEach { arr.put(pushJson(it, sourceIndex, coverData[it.bookUrl])) }
                             val body = JSONObject().apply { put("books", arr) }.toString()
                             val push = request("POST", "$base/api/m/books", token(), body)
                             if (push.first !in 200..299) {
@@ -701,7 +731,9 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
                 if (coverFix > 0) append("　补封面 $coverFix 本")
                 if (skipped > 0) append("　重名跳过 $skipped 本")
                 if (localDup > 0) append("　本机重复 $localDup 本")
-                append("\n飞牛书架共 $shelfTotal 本（已发送 ${toProgress.size} 本进度，封面随书回传）")
+                if (badUrl > 0) append("　非详情页跳过 $badUrl 本")
+                if (noOrigin > 0) append("　无匹配书源 $noOrigin 本")
+                append("\n飞牛书架共 $shelfTotal 本（已发送 ${toProgress.size} 本进度，origin=bookSourceUrl）")
             }
         }.onSuccess { summary ->
             binding.tvStatus.text = summary
@@ -722,8 +754,11 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
         val base = requireServerAndToken() ?: return
         binding.tvStatus.text = "上传缓存中…（扫描本机 book_cache）"
         execute {
+            val sourceIndex = buildSourceIndex()
             val books = appDb.bookDao.flowAll().first()
                 .filter { it.bookUrl.isNotEmpty() && !it.bookUrl.startsWith("file:") && it.name.isNotBlank() }
+            // 缓存书同样把在线封面下载下来，网页端 cache/<书名> 也有封面
+            val coverData = fetchCoverData(books)
             var pushed = 0
             var chapterCount = 0
             var imageCount = 0
@@ -737,7 +772,7 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
                 val files = folder.listFiles { f -> f.isFile && f.name.endsWith(".nb", true) }
                     .orEmpty()
                 if (files.isEmpty()) continue
-                val payload = cacheJson(book, folder, files)
+                val payload = cacheJson(book, folder, files, sourceIndex, coverData[book.bookUrl])
                 if (payload == null) {
                     skipped++
                     continue
@@ -787,7 +822,13 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
     }
 
     /** 一本书的 /api/m/cache 载荷：章节原文 + 图片 + 封面（字段见文档 §16.1） */
-    private fun cacheJson(book: Book, folder: File, files: Array<out File>): JSONObject? {
+    private fun cacheJson(
+        book: Book,
+        folder: File,
+        files: Array<out File>,
+        index: SourceIndex,
+        cover: Pair<String, String>? = null
+    ): JSONObject? {
         val chapters = JSONArray()
         for (f in files) {
             val index = f.name.take(5).toIntOrNull() ?: continue
@@ -812,18 +853,20 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
                     })
                 }
         }
+        val (origin, originName) = index.resolve(book)
         return JSONObject().apply {
             put("layout", "legado")
             put("book", JSONObject().apply {
                 put("bookUrl", book.bookUrl)
                 put("name", book.name)
                 put("author", book.author)
-                put("origin", book.origin)
-                put("originName", book.originName)
+                // origin 仍是书源真实地址；补不上就留空，正文靠 chapters[].raw 也能离线读
+                put("origin", origin)
+                if (originName.isNotEmpty()) put("originName", originName)
                 book.intro?.takeIf { it.isNotEmpty() }?.let { put("intro", it.take(500)) }
                 put("durChapterIndex", book.durChapterIndex)
             })
-            localCover(book)?.let { (mime, data) ->
+            (cover ?: localCover(book))?.let { (mime, data) ->
                 put("coverMime", mime)
                 put("coverData", data)
             }
@@ -855,6 +898,8 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
             var total = 0
             var truncated = false
             val first = since <= 0L
+            val currentUrls = parts.map { normSourceUrl(it.bookSourceUrl) }.toHashSet()
+            var pushedDeleted = 0
 
             if (first) {
                 // 首次：本机上千条源按 URL 合并上传（§17.5 + 13.2），不做整库替换
@@ -864,7 +909,7 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
                 }
                 if (all.isNotEmpty()) {
                     val body = JSONArray().also { arr ->
-                        all.forEach { arr.put(JSONObject(GSON.toJson(it))) }
+                        all.forEach { arr.put(sourceJson(it)) }
                     }.toString()
                     val r = request("POST", "$base/api/m/sources", token(), body, readTimeoutMs = 180000)
                     if (r.first !in 200..299) throw IllegalStateException(explain(r.second))
@@ -893,18 +938,28 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
                         appDb.bookSourceDao.getBookSource(p.bookSourceUrl)?.let { changed.add(it) }
                     }
                 }
-                if (changed.isNotEmpty()) {
+                // §17.2：本机删掉的源也要告诉服务端（带 lastUpdateTime），否则下一轮 pull 又把它拉回来
+                val goneUrls = readSourceSnapshot().filter { it.isNotEmpty() && it !in currentUrls }
+                if (changed.isNotEmpty() || goneUrls.isNotEmpty()) {
                     val payload = JSONObject().apply {
                         put("since", since)
                         put("updated", JSONArray().also { arr ->
-                            changed.forEach { arr.put(JSONObject(GSON.toJson(it))) }
+                            changed.forEach { arr.put(sourceJson(it)) }
                         })
-                        put("deleted", JSONArray())
+                        put("deleted", JSONArray().also { arr ->
+                            goneUrls.forEach { u ->
+                                arr.put(JSONObject().apply {
+                                    put("bookSourceUrl", u)
+                                    put("lastUpdateTime", System.currentTimeMillis())
+                                })
+                            }
+                        })
                     }.toString()
                     val r = request("POST", "$base/api/m/sources/sync", token(), payload, readTimeoutMs = 180000)
                     if (r.first !in 200..299) throw IllegalStateException(explain(r.second))
                     val obj = JSONObject(r.second)
                     pushed = changed.size
+                    pushedDeleted = goneUrls.size
                     applied = obj.optInt("applied")
                     skipped = obj.optInt("skipped")
                     pulled += mergePull(obj.optJSONArray("pull"))
@@ -929,13 +984,17 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
                 }
             }
 
+            // 记下这次本机有的书源地址，下一轮用它识别「本机删掉的源」
+            saveSourceSnapshot(currentUrls)
+
             buildString {
                 if (first) {
                     append("书源同步完成（首次接入）：合并上传 $pushed 个（新增 $applied　更新 $skipped）")
                 } else {
                     append("书源同步完成：推送 $pushed 个（采纳 $applied　跳过 $skipped）　拉取 $pulled 个")
                 }
-                if (removed > 0) append("　删除 $removed 个")
+                if (pushedDeleted > 0) append("　推送删除 $pushedDeleted 个")
+                if (removed > 0) append("　服务端删除 $removed 个")
                 append("\n飞牛书源 $total 个　本地 ${appDb.bookSourceDao.allCount()} 个")
                 if (truncated) append("\n服务端返回被截断，再点一次继续")
             }
@@ -1019,21 +1078,173 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
         else -> null
     }
 
-    /** 推给 /api/m/books 的一本书：在线封面给 coverUrl，本地封面给 coverData（文档 14.2 / 回传规范 §1.3） */
-    private fun pushJson(book: Book): JSONObject = JSONObject().apply {
-        put("bookUrl", book.bookUrl)
-        put("name", book.name)
-        put("author", book.author)
-        remoteCover(book.coverUrl)?.let { put("coverUrl", it) }
-        localCover(book)?.let { (mime, data) ->
-            put("coverMime", mime)
-            put("coverData", data)
+    /**
+     * 在线封面下载：本机没有封面文件时，把书里的封面地址抓下来转 base64。
+     * 源站图片常有防盗链 / 需要 Referer，网页端直接引用会白图，落一份到 NAS 才稳。
+     */
+    private suspend fun fetchCoverData(books: Collection<Book>): Map<String, Pair<String, String>> =
+        coroutineScope {
+            val jobs = books.asSequence()
+                .filter { remoteCover(it.coverUrl) != null && localCover(it) == null }
+                .distinctBy { it.bookUrl }
+                .take(MAX_COVER_FETCH)
+                .map { book -> book.bookUrl to async(Dispatchers.IO) { downloadCover(book) } }
+                .toList()
+            val map = HashMap<String, Pair<String, String>>()
+            for ((url, job) in jobs) job.await()?.let { map[url] = it }
+            map
         }
-        book.intro?.takeIf { it.isNotEmpty() }?.let { put("intro", it.take(500)) }
-        put("originName", "手机端")
-        if (book.totalChapterNum > 0) put("totalChapterNum", book.totalChapterNum)
-        put("index", book.durChapterIndex)
-        book.durChapterTitle?.takeIf { it.isNotEmpty() }?.let { put("title", it) }
+
+    private fun downloadCover(book: Book): Pair<String, String>? {
+        val url = remoteCover(book.coverUrl) ?: return null
+        // 源站图片多数按「图片自己的域名」校验 Referer（如 gdbzkz.la 的图配 gdbzkz.com 会被 403），
+        // 先拿图片域名试，再退 book.origin（书源地址）
+        val refs = ArrayList<String>()
+        val imgHost = hostOfUrl(url)
+        if (imgHost != null) refs.add("https://$imgHost/")
+        val origin = book.origin.orEmpty().trim()
+        if (origin.startsWith("http://", true) || origin.startsWith("https://", true)) {
+            refs.add(if (origin.endsWith("/")) origin else "$origin/")
+        }
+        for (ref in refs.ifEmpty { listOf("") }) {
+            val data = fetchCoverBytes(url, ref) ?: continue
+            return data
+        }
+        return null
+    }
+
+    /** 抓一张封面图（8 秒超时、上限 MAX_COVER_BYTES），成功返回 mime + base64 */
+    private fun fetchCoverBytes(url: String, referer: String): Pair<String, String>? = runCatching {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        try {
+            conn.connectTimeout = 8000
+            conn.readTimeout = 8000
+            conn.instanceFollowRedirects = true
+            conn.setRequestProperty("User-Agent", COVER_UA)
+            conn.setRequestProperty("Accept", "image/*")
+            if (referer.isNotEmpty()) conn.setRequestProperty("Referer", referer)
+            if (conn.responseCode !in 200..299) return null
+            val bytes = conn.inputStream.use { ins ->
+                val out = ByteArrayOutputStream()
+                val chunk = ByteArray(8192)
+                var total = 0L
+                while (true) {
+                    val n = ins.read(chunk)
+                    if (n <= 0) break
+                    total += n
+                    if (total > MAX_COVER_BYTES) return null
+                    out.write(chunk, 0, n)
+                }
+                out.toByteArray()
+            }
+            if (bytes.size < 8) return null
+            val mime = coverMimeOf(bytes) ?: return null
+            mime to Base64.encodeToString(bytes, Base64.NO_WRAP)
+        } finally {
+            conn.disconnect()
+        }
+    }.getOrNull()
+
+    /**
+     * 书源索引：把「bookSourceUrl → (url, 名字)」「host → 同宿主书源」建好后，
+     * 推书时用它把 origin 补成书源真实地址（文档 13/14：服务端靠 origin 取目录和正文）。
+     */
+    private class SourceIndex(
+        private val byUrl: Map<String, Pair<String, String>>,
+        private val byHost: Map<String, List<Pair<String, String>>>
+    ) {
+        /** @return origin（真实 bookSourceUrl）与 originName；匹配不到返回空串，绝不写占位名 */
+        fun resolve(book: Book): Pair<String, String> {
+            val raw = book.origin.orEmpty().trim()
+            val name = book.originName.orEmpty().trim()
+            val key = normSourceUrl(raw)
+            if (!isPlaceholderOrigin(raw) && (byUrl.containsKey(key) || raw.startsWith("http"))) {
+                val hit = byUrl[key]
+                val realName = hit?.second?.takeIf { !isPlaceholderOrigin(it) }
+                    ?: name.takeIf { !isPlaceholderOrigin(it) }
+                    ?: ""
+                return (hit?.first ?: raw) to realName
+            }
+            // 规则 2：origin 拿不到时，用 bookUrl 的 host 去书源列表里匹配 bookSourceUrl 的 host
+            val host = hostOfUrl(book.bookUrl)
+            if (host != null) {
+                val list = byHost[host]
+                if (!list.isNullOrEmpty()) {
+                    val best = list.firstOrNull { it.second == name } ?: list.first()
+                    return best
+                }
+            }
+            if (!isPlaceholderOrigin(name)) {
+                val hits = byUrl.values.filter { it.second == name }
+                if (hits.size == 1) return hits[0]
+            }
+            return "" to ""
+        }
+    }
+
+    /** 建书源索引：只用 bookSourcePart 的地址与名称，不逐条查库 */
+    private suspend fun buildSourceIndex(): SourceIndex {
+        val parts = appDb.bookSourceDao.flowAll().first()
+        val byUrl = HashMap<String, Pair<String, String>>()
+        val byHost = HashMap<String, MutableList<Pair<String, String>>>()
+        for (p in parts) {
+            val url = p.bookSourceUrl
+            if (url.isBlank()) continue
+            val pair = url to p.bookSourceName
+            byUrl[normSourceUrl(url)] = pair
+            val host = hostOfUrl(url) ?: continue
+            byHost.getOrPut(host) { ArrayList() }.add(pair)
+        }
+        return SourceIndex(byUrl, byHost)
+    }
+
+    /** 本机书源地址快照（上次同步成功时记的），用来识别本机删掉的源 */
+    private fun readSourceSnapshot(): Set<String> = runCatching {
+        val raw = getPrefString(KEY_SOURCES_SNAPSHOT, "").orEmpty()
+        if (raw.isEmpty()) emptySet() else {
+            val arr = JSONArray(raw)
+            (0 until arr.length()).map { normSourceUrl(arr.optString(it)) }.toSet()
+        }
+    }.getOrDefault(emptySet())
+
+    private fun saveSourceSnapshot(urls: Collection<String>) {
+        putPrefString(
+            KEY_SOURCES_SNAPSHOT,
+            JSONArray().also { arr -> urls.forEach { arr.put(it) } }.toString()
+        )
+    }
+
+    /** 推给 /api/m/sources 或 /sources/sync 的一个书源：lastUpdateTime 缺失时补当前时间（§17.1） */
+    private fun sourceJson(src: BookSource): JSONObject =
+        JSONObject(GSON.toJson(src)).apply {
+            if (optLong("lastUpdateTime", 0L) <= 0L) {
+                put("lastUpdateTime", System.currentTimeMillis())
+            }
+        }
+
+    /** 推给 /api/m/books 的一本书：origin 必须是书源真实地址（文档 13/14 / 回传规范 §1.3） */
+    private fun pushJson(
+        book: Book,
+        index: SourceIndex,
+        cover: Pair<String, String>? = null
+    ): JSONObject {
+        val (origin, originName) = index.resolve(book)
+        return JSONObject().apply {
+            put("bookUrl", book.bookUrl)
+            put("name", book.name)
+            put("author", book.author)
+            put("origin", origin)
+            if (originName.isNotEmpty()) put("originName", originName)
+            remoteCover(book.coverUrl)?.let { put("coverUrl", it) }
+            (cover ?: localCover(book))?.let { (mime, data) ->
+                put("coverMime", mime)
+                put("coverData", data)
+            }
+            book.intro?.takeIf { it.isNotEmpty() }?.let { put("intro", it.take(500)) }
+            if (book.totalChapterNum > 0) put("totalChapterNum", book.totalChapterNum)
+            put("index", book.durChapterIndex)
+            book.durChapterTitle?.takeIf { it.isNotEmpty() }?.let { put("title", it) }
+        }
     }
 
     private fun openWebShelf() {
@@ -1099,4 +1310,37 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
         }
     }
 
+}
+
+
+// ---------------- 书源地址工具（补 origin 用） ----------------
+
+/** 这些值都不是真实书源地址，一律当「没填」处理 */
+private val ORIGIN_PLACEHOLDERS = setOf(
+    "", "手机端", "本地", "未知", "导入", "默认", "loc_book", "local", "null", "none"
+)
+
+private fun isPlaceholderOrigin(value: String?): Boolean =
+    (value ?: "").trim().lowercase() in ORIGIN_PLACEHOLDERS
+
+/** 书源地址归一化：去空白、去尾部斜杠、转小写，用于判断两边是不是同一个源 */
+private fun normSourceUrl(url: String?): String =
+    (url ?: "").trim().trimEnd('/').lowercase()
+
+/** 取 URL 的 host（去 www.），解析失败返回 null */
+private fun hostOfUrl(url: String?): String? {
+    val s = (url ?: "").trim()
+    if (s.isEmpty()) return null
+    val h = runCatching { URI(s).host }.getOrNull() ?: runCatching {
+        Regex("https?://([^/:?#]+)").find(s)?.groupValues?.get(1)
+    }.getOrNull()
+    return h?.lowercase()?.removePrefix("www.")?.takeIf { it.isNotBlank() }
+}
+
+/** 搜索页 / 临时跳转不是书籍详情页，推上去服务端取不到目录（文档 13.1） */
+private fun looksLikeSearchUrl(url: String): Boolean {
+    val s = url.lowercase()
+    return s.contains("/search") || s.contains("?q=") || s.contains("&q=") ||
+            s.contains("?wd=") || s.contains("?keyword=") || s.contains("?key=") ||
+            s.contains("/so/") || s.contains("s?ie=")
 }

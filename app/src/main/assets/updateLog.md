@@ -12,6 +12,19 @@
 * 正文出现缺字漏字、内容缺失、排版错乱等情况，有可能是净化规则或简繁转换出现问题。
 * 漫画源看书显示乱码，**阅读与其他软件的源并不通用**，请导入阅读的支持的漫画源！
 
+**2026/11/08（1.8）**
+
+* 修复 1.7 同步给飞牛的书在网页端打不开（提示「没有书源」、目录空、正文读不出）：根因是加书时 `origin` 传空、`originName` 传占位「手机端」，服务端靠 `book.origin` 取目录和正文
+  - 推书 `origin` 一律填书源真实地址（`BookSource.bookSourceUrl`，如 `http://www.qiushu.info`），`originName` 填该源名（如 `🎉 狗狗书籍`）
+  - 确实拿不到 origin 时，先用 `bookUrl` 的 host 去书源列表匹配同宿主书源（多源取同名那条），再退按源名唯一匹配；都匹配不到才留空，并在结果里报「无匹配书源 N 本」
+  - 搜索页 / 临时跳转（`/search`、`?q=`、`&q=`、`?wd=`、`?keyword=`、`/so/` …）不算书籍详情页，直接跳过并报「非详情页跳过 N 本」
+* ⑧ 缓存载荷按 §16 补齐：`layout:"legado"` + `chapters[].file` + `chapters[].raw`（`.nb` 原文，不做任何处理）+ `origin`/`originName`；即使 origin 补不上，也能靠章节原文离线读正文
+* 封面：本机没有封面文件时按书的封面地址现下（Referer 先用图片自己的域名，被 403 再退书源地址），转 base64 一起推，网页书架与 `cache/<书名>/` 都有图
+* ⑨ 每次改/删书源都带 `lastUpdateTime = 现在`：本地改过的按 `bookSourceUrl` 推给飞牛，本机删掉的推 `deleted`（靠书源地址快照识别）；服务端更进的版本 `pull` 回本地覆盖
+* 菜单 ② 文案写明 origin 规则；⑧ 文案补 `layout:legado + chapters[].file/raw + origin`；⑨ 文案补「最后一次修改为准 / 删除也同步」
+* 版本号 1.8（versionCode 10800），与安卓 4.0 版同步
+* 真机验证（MuMu 模拟器 + FnReader 1.11.1 / 1.11.2）：书架 9 本 origin 全部等于书源 `bookSourceUrl`、originName 与源名一致；6 本目录与正文可读（5227 / 858 / 12 / 1674 / 1375 / 922 章）；⑧ 落盘 `cache/<书名>/meta.json`（`layout: legado`、`chapters[].raw` 原文、`raw/*.nb`）；5 本封面落 NAS `covers/` 并改指向 `/api/covers/`；⑨ 双向：本机改名推送后服务端即变，服务端改名后本地被覆盖
+
 **2026/11/08（1.7）**
 
 * 适配 FnReader 1.11.0 新规范（服务端 `APP同步接口.md` 新增 §16 缓存同步、§17 书源双向同步）
