@@ -68,7 +68,7 @@
     <string name="other_setting">Other settings</string>
     <string name="fnreader_server">FnReader server</string>
     <string name="fnreader_entry">Connect to FnReader server</string>
-    <string name="fnreader_entry_summary">FeiNiu library: one-tap book source import, WebDAV, HTTP API and more</string>
+    <string name="fnreader_entry_summary">FeiNiu library: one-tap book source import, full shelf sync back to NAS</string>
     <string name="fnreader_addr_hint">Server address, e.g. http://192.168.5.110:5666/app/legado-web</string>
     <string name="fnreader_token_hint">Access token (FnReader → Settings → Mobile access)</string>
     <string name="fnreader_save">Save</string>

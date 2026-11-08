@@ -126,46 +126,35 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
             "下载 /api/m/sources.json（Legado 数组格式）直接导入，导入后搜索、目录、正文都走飞牛"
         ) { importSources() }
         addMethod(
-            "② 复制同步接口地址",
-            "GET /api/m/sync?token=…，一次拿到书架、进度、书源概况；这个地址里带令牌，别转发给别人"
-        ) { copyText(syncUrl(serverBase() ?: return@addMethod), "已复制同步接口地址") }
-        addMethod(
-            "③ 全部同步到飞牛书架（新书自动建、重名跳过）",
+            "② 全部同步到飞牛书架（新书自动建、重名跳过）",
             "本机书架上每本书都推给飞牛：飞牛没有的书自动建进书架（POST /api/m/books，带封面与简介），"
                     + "再把章节与位置回传（POST /api/m/progress/batch）；书名相同的不重复添加，"
                     + "封面一并回传（本机缓存图转 base64 落到 NAS 的 covers/），飞牛那边缺封面的会顺手补上"
+                    + "（回传字段见 docs《app回传接受规范》）"
         ) { uploadProgress() }
         addMethod(
-            "④ WebDAV（备份与恢复）",
-            "把书架备份挂到飞牛 /dav/backup/；/dav/books/ 可浏览已下载的 txt"
-        ) { showWebDav() }
-        addMethod(
-            "⑤ HTTP API（自建客户端）",
-            "查看 /api/m/* 接口表与令牌，含 sync / shelf / toc / content / progress"
-        ) { showHttpApi() }
-        addMethod(
-            "⑥ 打开飞牛阅读网页",
+            "③ 打开飞牛阅读网页",
             "用 App 内置浏览器打开 FnReader 网页书架"
         ) { openWebShelf() }
         addMethod(
-            "⑦ 接入手册",
+            "④ 接入手册",
             "同步接口、APK 接入、手机接入 API 三份文档都在这里"
         ) { showDocs() }
         addMethod(
-            if (bridgeOn()) "⑧ 手机解析待命：已开启（点此关闭）"
-            else "⑧ 手机解析待命：已关闭（点此开启）",
+            if (bridgeOn()) "⑤ 手机解析待命：已开启（点此关闭）"
+            else "⑤ 手机解析待命：已关闭（点此开启）",
             "飞牛跑不了的书源（要 WebView / 加密接口）派给本机解析：开了之后保持后台常驻，"
                     + "网页搜索命中这类书源时由本机执行 search / toc / content 并回传结果；"
                     + "领任务时会把本机登记到网页「设置 → 软总线」，可以在那边单独暂停这台"
         ) { toggleBridge() }
         addMethod(
-            "⑨ 接入书源桥（一个「飞牛书库」源读完所有）",
+            "⑥ 接入书源桥（一个「飞牛书库」源读完所有）",
             "导入服务端自动生成的单品书源：搜索 / 详情 / 目录 / 正文全部走 /api/m/legado/*，"
                     + "本机不解析、不装书源规则也能看书；换服务器地址后重新导入一次即可"
                     + "（源规则里带着令牌，公网访问请用 https）"
         ) { importBridge() }
         addMethod(
-            "⑩ 查看软总线（哪台设备在代理解析）",
+            "⑦ 查看软总线（哪台设备在代理解析）",
             "GET /api/bus：列出已报到的手机、在线状态、累计代理解析次数；"
                     + "要暂停某一台，在飞牛网页「设置 → 软总线」里点一下就行"
         ) { showBus() }
@@ -307,10 +296,6 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
         return resolvedBase ?: bases.first()
     }
 
-    /** 同步接口（文档 1）：一次拿到书架、进度、书源概况 */
-    private fun syncUrl(base: String): String =
-        "$base/api/m/sync?token=${Uri.encode(token())}"
-
     /** 自己调用的同步接口：令牌走请求头，不落在 URL 里 */
     private fun syncApi(base: String): String =
         "$base/api/m/sync?full=0"
@@ -318,18 +303,6 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
     /** 书源数组（文档 2）：与 Legado 导出格式一致的数组，可直接导入 */
     private fun sourcesUrl(base: String): String =
         "$base/api/m/sources.json?all=1&token=${Uri.encode(token())}"
-
-    private fun davUrl(base: String): String {
-        val uri = Uri.parse(base)
-        val scheme = uri.scheme ?: "http"
-        val host = uri.host ?: base
-        return "$scheme://$host:1122/dav/"
-    }
-
-    private fun copyText(text: String, tip: String) {
-        requireContext().sendToClip(text)
-        toastOnUi(tip)
-    }
 
     // ---------------- 同步 ----------------
 
@@ -552,7 +525,7 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
                     if (ver.isNotEmpty()) append("　v").append(ver)
                     append("\n")
                 }
-                if (isEmpty()) append("还没有设备报到：打开 ⑧ 手机解析待命后，这里会出现本机")
+                if (isEmpty()) append("还没有设备报到：打开 ⑤ 手机解析待命后，这里会出现本机")
                 val pending = obj?.optInt("pending") ?: 0
                 if (pending > 0) append("\n排队中的任务：$pending")
             }
@@ -654,13 +627,13 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
                     put("bookUrl", book.bookUrl)
                     put("name", book.name)
                     put("author", book.author)
-                    remoteCover(book.coverUrl)?.let { put("coverUrl", it) }
                     put("index", book.durChapterIndex)
                     put("pos", book.durChapterPos)
                     put("title", book.durChapterTitle ?: "")
                 })
             }
             var progressUpdated = items.length()
+            var refilled = 0
             if (items.length() > 0) {
                 val pr = request(
                     "POST",
@@ -669,12 +642,39 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
                     JSONObject().apply { put("items", items) }.toString()
                 )
                 if (pr.first !in 200..299) throw IllegalStateException("回传进度失败：${explain(pr.second)}")
-                progressUpdated = runCatching { JSONObject(pr.second).optInt("updated") }
-                    .getOrDefault(items.length())
+                val obj = runCatching { JSONObject(pr.second) }.getOrNull()
+                progressUpdated = obj?.optInt("updated") ?: items.length()
+                // 规范 9：item 里没带 name 且书不存在时会在 missing 里返回 bookUrl；这里兜底补推一次
+                val missing = obj?.optJSONArray("missing") ?: JSONArray()
+                if (missing.length() > 0) {
+                    val byUrl = picked.values.associateBy { it.bookUrl }
+                    val retry = ArrayList<Book>()
+                    for (i in 0 until missing.length()) {
+                        val url = missing.optString(i)
+                        byUrl[url]?.let { retry.add(it) }
+                    }
+                    if (retry.isNotEmpty()) {
+                        for (batch in retry.chunked(PUSH_BATCH)) {
+                            val arr = JSONArray()
+                            batch.forEach { arr.put(pushJson(it)) }
+                            val body = JSONObject().apply { put("books", arr) }.toString()
+                            val push = request("POST", "$base/api/m/books", token(), body)
+                            if (push.first !in 200..299) {
+                                throw IllegalStateException("补推飞牛未收下的书失败：${explain(push.second)}")
+                            }
+                            val pr2 = runCatching { JSONObject(push.second) }.getOrNull()
+                            val addNow = pr2?.optInt("added") ?: 0
+                            added += addNow
+                            shelfTotal += addNow
+                            refilled += batch.size
+                        }
+                    }
+                }
             }
 
             buildString {
                 append("全部同步完成：新增 $added 本　更新 $progressUpdated 条进度")
+                if (refilled > 0) append("　补推 $refilled 本")
                 if (coverFix > 0) append("　补封面 $coverFix 本")
                 if (skipped > 0) append("　重名跳过 $skipped 本")
                 if (localDup > 0) append("　本机重复 $localDup 本")
@@ -731,7 +731,7 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
         else -> null
     }
 
-    /** 推给 /api/m/books 的一本书：在线封面给 coverUrl，本地封面给 coverData（文档 14.2） */
+    /** 推给 /api/m/books 的一本书：在线封面给 coverUrl，本地封面给 coverData（文档 14.2 / 回传规范 §1.3） */
     private fun pushJson(book: Book): JSONObject = JSONObject().apply {
         put("bookUrl", book.bookUrl)
         put("name", book.name)
@@ -743,52 +743,9 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
         }
         book.intro?.takeIf { it.isNotEmpty() }?.let { put("intro", it.take(500)) }
         put("originName", "手机端")
+        if (book.totalChapterNum > 0) put("totalChapterNum", book.totalChapterNum)
         put("index", book.durChapterIndex)
-        put("title", book.durChapterTitle ?: "")
-    }
-
-    private fun showWebDav() {
-        val base = requireServerAndToken() ?: return
-        val dav = davUrl(base)
-        val tk = token()
-        alert {
-            setTitle("WebDAV 接入")
-            setMessage(
-                "地址：$dav\n用户名：任意\n密码：$tk\n\n" +
-                    "· /dav/books/  书架里已下载的书籍（只读，.txt）\n" +
-                    "· /dav/backup/ 可读写，可接「我的 → 备份与恢复 → WebDAV」"
-            )
-            positiveButton("复制地址") { requireContext().sendToClip(dav) }
-            neutralButton("打开备份设置") {
-                startActivity<ConfigActivity> { putExtra("configTag", ConfigTag.BACKUP_CONFIG) }
-            }
-            negativeButton(android.R.string.cancel) {}
-        }
-    }
-
-    private fun showHttpApi() {
-        val base = requireServerAndToken() ?: return
-        val apiBase = "$base/api/m/"
-        val tk = token()
-        alert {
-            setTitle("HTTP API")
-            setMessage(
-                "接口基址：$apiBase\n请求头：X-Api-Token: $tk\n\n" +
-                    "GET  /sync 书架+进度+书源（可带 since 增量、full=1 带完整规则）\n" +
-                    "GET  /sources.json 书源数组（?all=1 含停用）\n" +
-                    "GET  /shelf 书架\n" +
-                    "GET  /toc?url= 目录\n" +
-                    "GET  /content?url=&index= 正文\n" +
-                    "GET  /cover?url= 封面\n" +
-                    "POST /progress 单条进度\n" +
-                    "POST /progress/batch 批量进度（带 name 会自动建书）\n" +
-                    "POST /books 把本机新加的书推给飞牛\n\n" +
-                    "GET  /api/bus 软总线：哪些手机在线、能代理解析\n" +
-                    "令牌只放在请求头里，别拼进 URL；公网访问务必 https"
-            )
-            positiveButton("复制接口地址") { requireContext().sendToClip(apiBase) }
-            okButton()
-        }
+        book.durChapterTitle?.takeIf { it.isNotEmpty() }?.let { put("title", it) }
     }
 
     private fun openWebShelf() {
