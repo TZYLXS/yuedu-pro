@@ -14,7 +14,9 @@ import io.legado.app.R
 import io.legado.app.base.BaseDialogFragment
 import io.legado.app.data.appDb
 import io.legado.app.data.entities.Book
+import io.legado.app.data.entities.BookSource
 import io.legado.app.databinding.DialogFnreaderConfigBinding
+import io.legado.app.help.book.BookHelp
 import io.legado.app.lib.dialogs.alert
 import io.legado.app.lib.dialogs.selector
 import io.legado.app.lib.theme.ThemeStore
@@ -23,6 +25,7 @@ import io.legado.app.model.FnReaderRemote
 import io.legado.app.service.FnReaderBridgeService
 import io.legado.app.ui.association.OnLineImportActivity
 import io.legado.app.ui.browser.WebViewActivity
+import io.legado.app.utils.GSON
 import io.legado.app.utils.getPrefString
 import io.legado.app.utils.openUrl
 import io.legado.app.utils.putPrefString
@@ -47,7 +50,7 @@ import java.util.Locale
  *
  * 设计对齐 FnReader 的「App 同步接口」：
  * 一次 `GET /api/m/sync` 就能拿到书架、进度、书源概况，所以这个入口以同步为核心，
- * 把导入书源、回传进度、WebDAV、HTTP API、网页书架、接入手册收在同一个菜单里。
+ * 把导入书源、回传书架与进度、上传缓存、书源双向同步、网页书架、接入手册收在同一个菜单里。
  */
 class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config) {
 
@@ -71,6 +74,15 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
 
         /** 封面 base64 的内联上限，超过就不带图（服务端单张上限 8 MB） */
         private const val MAX_COVER_BYTES = 3L * 1024 * 1024
+
+        /** 书源双向同步的游标（服务端 serverTime，毫秒），下次按它算增量 */
+        const val KEY_SOURCES_SINCE = "fnReaderSourcesSinceMs"
+
+        /** 缓存上传单次请求体上限（文档 §16.5：服务端 32 MB，留一点余量） */
+        private const val MAX_CACHE_REQUEST = 30L * 1024 * 1024
+
+        /** 章节图片单张内联上限，超过就跳过（避免一本漫画把请求体撑爆） */
+        private const val MAX_INLINE_IMAGE = 2L * 1024 * 1024
     }
 
     private val binding by viewBinding(DialogFnreaderConfigBinding::bind)
@@ -158,6 +170,17 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
             "GET /api/bus：列出已报到的手机、在线状态、累计代理解析次数；"
                     + "要暂停某一台，在飞牛网页「设置 → 软总线」里点一下就行"
         ) { showBus() }
+        addMethod(
+            "⑧ 上传本机缓存到飞牛（网页离线读正文）",
+            "把已经缓存过的章节原文（book_cache 里的 .nb 文件）连同章节图片、封面原样推给飞牛"
+                    + "（POST /api/m/cache，文档 §16），NAS 自己转码成段落文本存进 cache/<书名>/，"
+                    + "之后网页阅读直接读本地文件、不再回头访问书源；整本一次上传，超过 30 MB 的本子跳过"
+        ) { uploadCache() }
+        addMethod(
+            "⑨ 书源双向同步（最后一次修改为准）",
+            "按 lastUpdateTime 双向对齐（GET/POST /api/m/sources/sync，文档 §17）：本机改过的书源推到飞牛，"
+                    + "飞牛更进的拉回本地，删除也同步；首次按 bookSourceUrl 合并上传，之后只传本机改过的那几条"
+        ) { syncSourcesBoth() }
     }
 
     private fun bridgeOn(): Boolean = getPrefString(KEY_BRIDGE, "0") == "1"
@@ -690,7 +713,272 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
         }
     }
 
-    /** 书名归一化：去书名号、空白（含全角）、大小写，用于「重名跳过」判定 */
+    /**
+     * ⑧ 上传本机缓存（文档 §16）：把 book_cache 里已缓存的章节原文原样发给 /api/m/cache，
+     * NAS 自己转码成段落文本，网页阅读从此读本地文件。
+     * 不做任何预处理（文档明确要求 raw 原样），一次一本，超上限的本子跳过。
+     */
+    private fun uploadCache() {
+        val base = requireServerAndToken() ?: return
+        binding.tvStatus.text = "上传缓存中…（扫描本机 book_cache）"
+        execute {
+            val books = appDb.bookDao.flowAll().first()
+                .filter { it.bookUrl.isNotEmpty() && !it.bookUrl.startsWith("file:") && it.name.isNotBlank() }
+            var pushed = 0
+            var chapterCount = 0
+            var imageCount = 0
+            var bytes = 0L
+            var skipped = 0
+            var failed = 0
+            val detail = StringBuilder()
+            for (book in books) {
+                val folder = File(BookHelp.cachePath, book.getFolderName())
+                if (!folder.isDirectory) continue
+                val files = folder.listFiles { f -> f.isFile && f.name.endsWith(".nb", true) }
+                    .orEmpty()
+                if (files.isEmpty()) continue
+                val payload = cacheJson(book, folder, files)
+                if (payload == null) {
+                    skipped++
+                    continue
+                }
+                val encoded = payload.toString()
+                if (encoded.length > MAX_CACHE_REQUEST) {
+                    skipped++
+                    continue
+                }
+                val r = runCatching {
+                    request("POST", "$base/api/m/cache", token(), encoded, readTimeoutMs = 60000)
+                }.getOrNull()
+                if (r == null || r.first !in 200..299) {
+                    failed++
+                    continue
+                }
+                val o = runCatching { JSONObject(r.second) }.getOrNull()
+                if (o == null || !o.optBoolean("ok", true)) {
+                    failed++
+                    continue
+                }
+                pushed++
+                chapterCount += o.optInt("chapters", files.size)
+                imageCount += o.optInt("images", 0)
+                bytes += o.optLong("bytes", encoded.toByteArray(Charsets.UTF_8).size.toLong())
+                if (detail.length < 240) {
+                    detail.append(folder.name)
+                        .append("　").append(o.optInt("chapters", files.size)).append(" 章\n")
+                }
+            }
+            buildString {
+                append("缓存上传完成：上传 $pushed 本　共 $chapterCount 章　图片 $imageCount 张")
+                if (skipped > 0) append("　过大跳过 $skipped 本")
+                if (failed > 0) append("　失败 $failed 本")
+                append("\n飞牛落盘 ${bytes / 1024} KB，网页阅读已改读本地文件")
+                if (pushed == 0) append("\n本机还没有已缓存的章节：先在阅读里下载几章再点这里")
+                if (detail.isNotEmpty()) append("\n").append(detail.toString().trimEnd())
+            }
+        }.onSuccess { summary ->
+            binding.tvStatus.text = summary
+            toastOnUi(summary.lineSequence().first())
+        }.onError {
+            val msg = FnReaderRemote.describeError(it)
+            binding.tvStatus.text = "上传缓存失败：$msg"
+            toastOnUi("上传缓存失败：$msg")
+        }
+    }
+
+    /** 一本书的 /api/m/cache 载荷：章节原文 + 图片 + 封面（字段见文档 §16.1） */
+    private fun cacheJson(book: Book, folder: File, files: Array<out File>): JSONObject? {
+        val chapters = JSONArray()
+        for (f in files) {
+            val index = f.name.take(5).toIntOrNull() ?: continue
+            val raw = runCatching { f.readText(Charsets.UTF_8) }.getOrNull() ?: continue
+            chapters.put(JSONObject().apply {
+                put("index", index)
+                put("title", appDb.bookChapterDao.getChapter(book.bookUrl, index)?.title ?: "")
+                put("file", f.name)
+                put("raw", raw)
+            })
+        }
+        if (chapters.length() == 0) return null
+        val images = JSONArray()
+        val imgDir = File(folder, "images")
+        if (imgDir.isDirectory) {
+            imgDir.listFiles()?.filter { it.isFile && it.length() in 1L..MAX_INLINE_IMAGE }
+                ?.forEach { img ->
+                    val data = runCatching { img.readBytes() }.getOrNull() ?: return@forEach
+                    images.put(JSONObject().apply {
+                        put("name", img.name)
+                        put("data", Base64.encodeToString(data, Base64.NO_WRAP))
+                    })
+                }
+        }
+        return JSONObject().apply {
+            put("layout", "legado")
+            put("book", JSONObject().apply {
+                put("bookUrl", book.bookUrl)
+                put("name", book.name)
+                put("author", book.author)
+                put("origin", book.origin)
+                put("originName", book.originName)
+                book.intro?.takeIf { it.isNotEmpty() }?.let { put("intro", it.take(500)) }
+                put("durChapterIndex", book.durChapterIndex)
+            })
+            localCover(book)?.let { (mime, data) ->
+                put("coverMime", mime)
+                put("coverData", data)
+            }
+            put("chapters", chapters)
+            if (images.length() > 0) put("images", images)
+        }
+    }
+
+    /**
+     * ⑨ 书源双向同步（文档 §17，lastUpdateTime 大的一方生效）。
+     *
+     * 首次（本地没记过 serverTime）：走一次性接口 POST /api/m/sources 按 bookSourceUrl 合并上传，
+     * 只把服务端 serverTime 记成下次的 since。**不能**把「本机全量 + since=0」推给
+     * /api/m/sources/sync —— 服务端会把这种全量推送当成整库快照，删掉本机没有的源（实测丢过 258 条）。
+     * 之后每次：本地有改动（lastUpdateTime > since）就 POST 增量，服务端更进的版本会进 pull 回来；
+     * 本地没改动就只 GET 增量，把服务端新增/修改的源落回本地。
+     */
+    private fun syncSourcesBoth() {
+        val base = requireServerAndToken() ?: return
+        binding.tvStatus.text = "书源双向同步中…（读取本地书源）"
+        execute {
+            val since = getPrefString(KEY_SOURCES_SINCE, "0")?.toLongOrNull() ?: 0L
+            val parts = appDb.bookSourceDao.flowAll().first()
+            var pushed = 0
+            var applied = 0
+            var skipped = 0
+            var pulled = 0
+            var removed = 0
+            var total = 0
+            var truncated = false
+            val first = since <= 0L
+
+            if (first) {
+                // 首次：本机上千条源按 URL 合并上传（§17.5 + 13.2），不做整库替换
+                val all = ArrayList<BookSource>()
+                for (p in parts) {
+                    appDb.bookSourceDao.getBookSource(p.bookSourceUrl)?.let { all.add(it) }
+                }
+                if (all.isNotEmpty()) {
+                    val body = JSONArray().also { arr ->
+                        all.forEach { arr.put(JSONObject(GSON.toJson(it))) }
+                    }.toString()
+                    val r = request("POST", "$base/api/m/sources", token(), body, readTimeoutMs = 180000)
+                    if (r.first !in 200..299) throw IllegalStateException(explain(r.second))
+                    val obj = JSONObject(r.second)
+                    pushed = all.size
+                    applied = obj.optInt("added")
+                    skipped = obj.optInt("updated")
+                    total = obj.optInt("total", total)
+                }
+                // 只为拿 serverTime 当下次的 since：since=现在，服务端不会回全量
+                val stamp = request("GET", "$base/api/m/sources/sync?since=${System.currentTimeMillis()}", token(), null)
+                if (stamp.first in 200..299) {
+                    val obj = JSONObject(stamp.second)
+                    total = obj.optInt("total", total)
+                    putPrefString(
+                        KEY_SOURCES_SINCE,
+                        obj.optLong("serverTime", System.currentTimeMillis()).toString()
+                    )
+                } else {
+                    putPrefString(KEY_SOURCES_SINCE, System.currentTimeMillis().toString())
+                }
+            } else {
+                val changed = ArrayList<BookSource>()
+                for (p in parts) {
+                    if (p.lastUpdateTime > since) {
+                        appDb.bookSourceDao.getBookSource(p.bookSourceUrl)?.let { changed.add(it) }
+                    }
+                }
+                if (changed.isNotEmpty()) {
+                    val payload = JSONObject().apply {
+                        put("since", since)
+                        put("updated", JSONArray().also { arr ->
+                            changed.forEach { arr.put(JSONObject(GSON.toJson(it))) }
+                        })
+                        put("deleted", JSONArray())
+                    }.toString()
+                    val r = request("POST", "$base/api/m/sources/sync", token(), payload, readTimeoutMs = 180000)
+                    if (r.first !in 200..299) throw IllegalStateException(explain(r.second))
+                    val obj = JSONObject(r.second)
+                    pushed = changed.size
+                    applied = obj.optInt("applied")
+                    skipped = obj.optInt("skipped")
+                    pulled += mergePull(obj.optJSONArray("pull"))
+                    removed += applyPullDeleted(obj.optJSONArray("pullDeleted"))
+                    total = obj.optInt("total", total)
+                    truncated = obj.optBoolean("truncated")
+                    putPrefString(
+                        KEY_SOURCES_SINCE,
+                        obj.optLong("serverTime", System.currentTimeMillis()).toString()
+                    )
+                } else {
+                    val r = request("GET", "$base/api/m/sources/sync?since=$since", token(), null, 120000)
+                    if (r.first !in 200..299) throw IllegalStateException(explain(r.second))
+                    val obj = JSONObject(r.second)
+                    pulled += mergePull(obj.optJSONArray("sources"))
+                    total = obj.optInt("total", total)
+                    truncated = obj.optBoolean("truncated")
+                    putPrefString(
+                        KEY_SOURCES_SINCE,
+                        obj.optLong("serverTime", System.currentTimeMillis()).toString()
+                    )
+                }
+            }
+
+            buildString {
+                if (first) {
+                    append("书源同步完成（首次接入）：合并上传 $pushed 个（新增 $applied　更新 $skipped）")
+                } else {
+                    append("书源同步完成：推送 $pushed 个（采纳 $applied　跳过 $skipped）　拉取 $pulled 个")
+                }
+                if (removed > 0) append("　删除 $removed 个")
+                append("\n飞牛书源 $total 个　本地 ${appDb.bookSourceDao.allCount()} 个")
+                if (truncated) append("\n服务端返回被截断，再点一次继续")
+            }
+        }.onSuccess { summary ->
+            binding.tvStatus.text = summary
+            toastOnUi(summary.lineSequence().first())
+        }.onError {
+            val msg = FnReaderRemote.describeError(it)
+            binding.tvStatus.text = "书源同步失败：$msg"
+            toastOnUi("书源同步失败：$msg")
+        }
+    }
+
+    /** 把服务端更进的源按 bookSourceUrl 覆盖回本地（§17.1 / §17.2 的 pull），返回写入条数 */
+    private suspend fun mergePull(arr: JSONArray?): Int {
+        if (arr == null) return 0
+        var n = 0
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val src = runCatching { GSON.fromJson(o.toString(), BookSource::class.java) }
+                .getOrNull() ?: continue
+            if (src.bookSourceUrl.isEmpty()) continue
+            appDb.bookSourceDao.insert(src)
+            n++
+        }
+        return n
+    }
+
+    /** 服务端删掉的源同步删本地（pullDeleted），返回删除条数 */
+    private suspend fun applyPullDeleted(arr: JSONArray?): Int {
+        if (arr == null) return 0
+        var n = 0
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val url = o.optString("bookSourceUrl")
+            if (url.isEmpty()) continue
+            appDb.bookSourceDao.delete(url)
+            n++
+        }
+        return n
+    }
+
+/** 书名归一化：去书名号、空白（含全角）、大小写，用于「重名跳过」判定 */
     private fun normName(name: String): String =
         name.replace("《", "").replace("》", "")
             .replace("\u3000", "")
@@ -784,14 +1072,15 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
         method: String,
         url: String,
         token: String,
-        jsonBody: String?
+        jsonBody: String?,
+        readTimeoutMs: Int = 12000
     ): Pair<Int, String> {
         var conn: HttpURLConnection? = null
         try {
             conn = URL(url).openConnection() as HttpURLConnection
             conn.requestMethod = method
             conn.connectTimeout = 6000
-            conn.readTimeout = 12000
+            conn.readTimeout = readTimeoutMs
             conn.setRequestProperty("X-Api-Token", token)
             conn.setRequestProperty("Accept", "application/json")
             if (jsonBody != null) {

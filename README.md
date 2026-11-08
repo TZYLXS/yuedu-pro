@@ -14,8 +14,8 @@
 
 | 产物 | 适用设备 | 说明 |
 | --- | --- | --- |
-| `yuedu_pro_app_1.0.26.110803-arm64.apk` | 2017 年后的手机 / 平板 / 电视盒子（绝大多数） | arm64-v8a，64 位原生库 |
-| `yuedu_pro_app_1.0.26.110803-armv7.apk` | 老一些的 32 位设备、部分低端盒子 | armeabi-v7a，兼容性优先 |
+| `yuedu_pro_app_1.7-arm64.apk` | 2017 年后的手机 / 平板 / 电视盒子（绝大多数） | arm64-v8a，64 位原生库 |
+| `yuedu_pro_app_1.7-armv7.apk` | 老一些的 32 位设备、部分低端盒子 | armeabi-v7a，兼容性优先 |
 
 不确定选哪个：先装 arm64，闪退或提示「应用未安装」再换 armv7。
 两者 Java 侧完全一致，只差 APK 里打包的原生库（.so）。
@@ -28,7 +28,7 @@
 | --- | --- |
 | 包名 / 应用名 | `io.legado.pro` / 阅读Pro |
 | minSdk / targetSdk | 24 / 33 |
-| versionCode | 24001 |
+| versionCode | 10700（1.7） |
 | 签名 | v1 (JAR) + v2 都在包里。`jarsigner -verify` 对 v1 报「jar 已验证」；`apksigner` 在 minSdk ≥ 24 时只校验 v2，会把 v1 显示成 false |
 | 依赖底座 | Legado `3.23.110211` |
 
@@ -71,6 +71,25 @@
 | 正文 | `GET /api/m/content?token=…&url=<bookUrl>&index=<i>` |
 | 封面 | `GET /api/m/cover?token=…&url=<bookUrl>` |
 
+### 客户端接入面板（我的 → 接入 FnReader 服务器，①–⑨）
+
+服务端 1.11.0 起，App 里这个面板能把书架、进度、书源、缓存都双向对齐：
+
+| 项 | 干什么 | 接口 |
+| --- | --- | --- |
+| ① | 导入书源（推荐接法） | `GET /api/m/sources.json` |
+| ② | 全部同步到飞牛书架（新书自动建、重名跳过、封面一起回传） | `POST /api/m/books` + `/api/m/progress/batch` + `/api/m/cover` |
+| ③ | 打开飞牛阅读网页 | 内置浏览器 |
+| ④ | 接入手册 | 同步接口 / APK 接入 / 手机接入 API 三份文档 |
+| ⑤ | 手机解析待命（飞牛跑不了的源派给本机解析） | `GET /api/m/remote/pending` + `POST /api/m/remote/result` |
+| ⑥ | 接入书源桥（一个「飞牛书库」源读完所有） | 服务端生成的 Legado 源 |
+| ⑦ | 查看软总线（哪台设备在代理解析） | `GET /api/bus` |
+| ⑧ | 上传本机缓存到飞牛（网页离线读正文，1.11.0 §16） | `POST /api/m/cache`，传 `.nb` 原文，服务端转码落 `cache/<书名>/` |
+| ⑨ | 书源双向同步（最后一次修改为准，1.11.0 §17） | 首次 `POST /api/m/sources` 合并；之后 `POST/GET /api/m/sources/sync` 按 `lastUpdateTime` 增量 |
+
+⑧ 单次请求上限 30 MB（超了整本跳过），⑨ 首次只做合并上传、不推「全量 + since=0」（服务端会当成整库快照删源，
+详见 `docs/app回传接受规范.md` §9）。
+
 ### 另外两种接法
 
 - **WebDAV**：`http://<飞牛IP>:1122/dav/`，用户名任意、密码填访问令牌；`/dav/backup/` 可接阅读Pro 的「备份与恢复 → WebDAV」
@@ -83,7 +102,7 @@
 | 项 | 阅读Pro | 阅读（yuedu-android4） |
 | --- | --- | --- |
 | 最低系统 | Android 7.0 / API 24 | Android 4.4 / API 19 |
-| 包名 | `io.legado.pro` | `io.legado.app` |
+| 包名 | `io.legado.pro` | `io.legado.api19` |
 | ABI | arm64-v8a、armeabi-v7a 各一包 | 仅 armeabi-v7a |
 | targetSdk | 33 | 30 |
 | 4.4 兼容补丁 | 保留但不再触发（TLS1.2 兜底、TTS 三参、PFD 回退等） | 全局生效 |

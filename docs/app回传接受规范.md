@@ -1,7 +1,7 @@
 # APP 回传接受规范
 
 > 服务端依据：FnReader `1.9.1`（`docs/APP同步接口.md` 第 4 / 9 / 11 / 13 / 14 章）
-> 客户端：阅读Pro `1.6`（`io.legado.pro`）、安卓4.0 版 `1.6`（`io.legado.api19`）
+> 客户端：阅读Pro `1.7`（`io.legado.pro`）、安卓4.0 版 `1.7`（`io.legado.api19`）
 > 本文写的是**服务端接收侧**的规矩：APP 往飞牛回传什么、字段怎么填、什么会被拒、什么会被合并。
 
 ## 0 通用约定
@@ -151,7 +151,7 @@ POST /api/m/sources      X-Api-Token: …
 - 1.10.0 起新增任务类型 `rank`（让手机代抓起点榜单）：本客户端只执行 `search` / `toc` / `content`，收到 `rank` 直接回 `{ok:false,error:"不支持的任务"}`，服务端会自动降级到纵横 / 17K
 - 1.10.0 新增 `GET /api/daily`（每日推荐，6 小时缓存，`stale:true` 表示用的是旧结果），与回传无关，APP 只读
 
-## 6 本项目 1.6 的落实方式
+## 6 本项目 1.6 / 1.7 的落实方式
 
 「③ 全部同步到飞牛书架」按钮 = 一次把 **推书 + 回传进度** 跑完：
 
@@ -178,3 +178,46 @@ POST /api/m/sources      X-Api-Token: …
 - [ ] 同 `bookUrl` 但书名为空 → 服务端不建记录
 - [ ] 令牌错 → 401 且提示「令牌不对或已被重置」
 - [ ] 关掉服务端再点同步 → 提示「连不上端口」，不是一句「同步失败」
+- [ ] `POST /api/m/cache` 推一本 → NAS `cache/<书名>/` 出现 `meta.json`、`0001 …txt`、`raw/`，网页能离线读正文
+- [ ] 书源首次同步后服务端 `total` 不少于同步前（一次都不许掉源），`POST /api/m/sources/sync` 只落在增量上
+
+## 8 缓存同步：`POST /api/m/cache`（1.10.1 起，1.10.2 改成传 Legado 原文）
+
+```json
+{
+  "layout": "legado",
+  "book": { "bookUrl": "…", "name": "…", "author": "…", "origin": "…", "originName": "…",
+            "intro": "…", "durChapterIndex": 3 },
+  "coverData": "<base64>", "coverMime": "image/png",
+  "chapters": [ { "index": 0, "title": "特别篇－苏醒3", "file": "00002-31b6549c458e124e.nb",
+                  "raw": "<.nb 文件原文>" } ],
+  "images": [ { "name": "0001-xxx.jpg", "data": "<base64>" } ]
+}
+```
+
+- `raw` 必须是客户端缓存文件**原文**：不去标签、不补缩进，服务端自己转码
+- 单章 `raw` 上限 **32 MB**；整本一次推更推荐，太大就分多次
+- 服务端落 `cache/<书名>/`：`meta.json`（`totalChapterNum` / `durChapterIndex` / 章节表）+ `0001 章节名.txt`（转码后正文）+ `raw/` 原文件 + `images/`；封面落 `covers/`
+- 响应 `{ "ok": true, "layout": "legado", "dir": "…", "chapters": 45, "withText": 45, "images": 0, "bytes": 756736, "cover": "…" }`
+- 落盘后网页阅读命中该书直接读本地文件，不再回源
+- 重复上传同一本会另建 `书名 (2)`（服务端按目录去重），不会覆盖旧目录
+
+## 9 书源双向同步：`GET|POST /api/m/sources/sync`（1.11.0）
+
+```http
+GET  /api/m/sources/sync?since=<毫秒>      X-Api-Token: …
+POST /api/m/sources/sync                   X-Api-Token: …
+{ "since": 1794148000000,
+  "updated": [ { "bookSourceUrl": "…", "bookSourceName": "…", "lastUpdateTime": 1794149100000, … } ],
+  "deleted": [ { "bookSourceUrl": "https://…", "lastUpdateTime": 1794149110000 } ] }
+```
+
+- LWW 判定：`lastUpdateTime` 大的赢；客户端没带时间戳按「刚刚修改」处理
+- `GET`：`since=0` 回全量，否则只回 `lastUpdateTime > since` 的源；响应带 `serverTime`，客户端存下来当下次的 `since`
+- `POST` 响应 `{ ok, applied, skipped, pull, pullDeleted, serverTime, truncated, total }`
+  - `pull`：服务端更进的版本，客户端按 `bookSourceUrl` 覆盖本地
+  - `pullDeleted`：服务端删掉的源，客户端同步删本地
+  - 单次返回有上限，`truncated: true` 时再请求一次接着拉
+- **实测坑（重要）**：把「本机全量 + `since: 0`」推给 `POST /api/m/sources/sync`，服务端会当成整库快照，把它自己那份里**本机没有的源删掉**（本机 835 条 + 服务端 1253 条 → 服务端掉到 995，丢 258 条；靠 `backup/sources-*.json` + `POST /api/m/sources` 才补回）
+  - 首次接入改用 §4 的 `POST /api/m/sources`（按 `bookSourceUrl` 合并，幂等安全），只把 `GET …/sync?since=<now>` 返回的 `serverTime` 记成下次的 `since`
+  - 之后只在本地确有 `lastUpdateTime > since` 的改动时 POST 增量；本地没改动就只 GET，不再每次重推上千条源

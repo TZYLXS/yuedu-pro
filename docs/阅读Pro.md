@@ -13,7 +13,7 @@ room 2.6.0 / okhttp 4.11.0 / compileSdk 34）在 JDK 17 上可稳定构建，且
 | `app/build.gradle` | `applicationId` → `io.legado.pro`（与官方版、API19 版共存） |
 | `app/build.gradle` | `minSdk 19 → 24`，`targetSdk 30 → 33` |
 | `app/build.gradle` | 新增 `-PtargetAbi=armv7/arm64` 开关，决定 `abiFilters` 与产物名后缀 |
-| `app/build.gradle` | `versionCode 19001 → 24001`，输出名 `${appName}_${flavor}_${version}${abiSuffix}.apk` |
+| `app/build.gradle` | `versionCode 19001 → 10700`（当前 1.7），输出名 `${appName}_${flavor}_${version}${abiSuffix}.apk` |
 | `modules/book`、`modules/rhino1.7.3` | `minSdk 24`、`targetSdk 33`，与主模块一致 |
 | `res/values*/strings.xml` | `app_name` → 阅读Pro（含 zh / zh-HK / zh-TW 三个语言目录） |
 | `AndroidManifest.xml` | 删除 `<uses-sdk tools:overrideLibrary=...>`（三方库 minSdk 21 < 24，合并无需 override） |
@@ -59,8 +59,8 @@ Android 7.0 起系统按 v2 校验，v1 只是给仍做 JAR 校验的老安装�
 
 | APK | 体积 | ABI | 校验 |
 | --- | --- | --- | --- |
-| `yuedu_pro_app_1.0.26.110803-armv7.apk` | 17.45 MB | armeabi-v7a | `sdkVersion 24` / `targetSdkVersion 33` / `io.legado.pro` / v2 签名 |
-| `yuedu_pro_app_1.0.26.110803-arm64.apk` | 17.50 MB | arm64-v8a | 同上 |
+| `yuedu_pro_app_1.7-armv7.apk` | 17.50 MB | armeabi-v7a | `sdkVersion 24` / `targetSdkVersion 33` / `io.legado.pro` / v2 签名 |
+| `yuedu_pro_app_1.7-arm64.apk` | 17.55 MB | arm64-v8a | 同上 |
 
 原生库（每个 APK 只带自己那一套）：
 
@@ -74,3 +74,19 @@ DEX：6 个（`classes.dex` ~8.6MB、`classes2.dex` 仅 2.9KB、`classes3.dex` ~
 - **真机运行验证**：测试机 adb 掉线，未实测启动、搜索、阅读。接上 USB 后跑 `scripts/verify_device.bat`。
 - 应用内「检查更新」仍指向 Legado 官方仓库，换成本仓库的 Release 需要改 `AppUpdateService` 的地址。
 - 未做混淆/资源压缩（`minifyEnabled false`），体积偏大，后续可按需开启。
+
+## 1.7 起：FnReader 1.11.0 的两个新接入项
+
+服务端 `docs/APP同步接口.md` 新增 §16 缓存同步、§17 书源双向同步，客户端在
+`ui/config/FnReaderConfigDialog.kt` 里加了两项（菜单 ①–⑦ 不动，新增 ⑧⑨）：
+
+| 方法 | 作用 | 要点 |
+| --- | --- | --- |
+| `uploadCache()` | ⑧ 把本机 `book_cache/<书名>/` 的 `.nb` 整本推给 `POST /api/m/cache` | `raw` 传原文；单本 > 30 MB 跳过；章节图片 1 B–2 MB 转 base64；读超时 60s |
+| `cacheJson()` | 组 §16 载荷 | `index` 取文件名前 5 位，`title` 取本地章节表，`file` 原名 |
+| `syncSourcesBoth()` | ⑨ 书源双向同步 | 首次 `POST /api/m/sources` 合并上传；之后按 `lastUpdateTime > since` 增量 POST/GET；`pull` 覆盖、`pullDeleted` 删除 |
+| `mergePull()` / `applyPullDeleted()` | 落服务端更进 / 删除的书源 | 都按 `bookSourceUrl` |
+
+首次同步为什么不用 `POST /api/m/sources/sync` 推全量：实测「本机全量 + `since: 0`」会被服务端当成整库快照，
+删掉本机没有的源（1253 → 995，丢 258 条），只能靠 `backup/sources-*.json` + `POST /api/m/sources` 补回。
+这条坑写进了 `docs/app回传接受规范.md` §9。
