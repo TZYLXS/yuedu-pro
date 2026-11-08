@@ -1,7 +1,7 @@
 # APP 回传接受规范
 
-> 服务端依据：FnReader `1.9.1`（`docs/APP同步接口.md` 第 4 / 9 / 11 / 13 / 14 章）
-> 客户端：阅读Pro `1.8`（`io.legado.pro`）、安卓4.0 版 `1.8`（`io.legado.api19`）
+> 服务端依据：FnReader `1.11.2`（`docs/APP同步接口.md` 第 4 / 9 / 11 / 13 / 14 / 15 / 16 / 17 章）
+> 客户端：阅读Pro `1.9`（`io.legado.pro`）、安卓4.0 版 `1.9`（`io.legado.api19`）
 > 本文写的是**服务端接收侧**的规矩：APP 往飞牛回传什么、字段怎么填、什么会被拒、什么会被合并。
 
 ## 0 通用约定
@@ -149,7 +149,11 @@ POST /api/m/sources      X-Api-Token: …
 - 领任务：`GET /api/m/remote/pending?wait=15000&limit=5&id=<设备id>&name=<设备名>&model=<机型>&ver=<版本>`（长轮询，`wait` ≤ 30s）；也可用请求头 `X-Device-Id / X-Device-Name / X-Device-Model`
 - 回结果：`POST /api/m/remote/result`，`{ "id": "<任务id>", "ok": true, "data": { … } }`；失败传 `{ "id": …, "ok": false, "error": "原因" }`
 - 60 秒内有轮询算在线；服务端按 `id` 去重
-- 1.10.0 起新增任务类型 `rank`（让手机代抓起点榜单）：本客户端只执行 `search` / `toc` / `content`，收到 `rank` 直接回 `{ok:false,error:"不支持的任务"}`，服务端会自动降级到纵横 / 17K
+- 任务类型：`search` / `toc` / `content`（本机书源规则）/ `rank`（代抓榜单，1.9 起支持）
+  - `rank` 的 `payload` 是 `{ "url": "https://www.qidian.com/rank/recom/" }`，`data` 约定为
+    `{ "source": "起点", "url": "…", "books": [ { "rank": 1, "name": "…", "url": "…", "author": "…", "cover": "…", "score": "…" } ] }`
+  - 本客户端抓页面不足 10 KB（反爬挑战页）或解析 0 本时回 `{ok:false,error:"原因"}`，服务端自动降级到纵横 / 17K
+  - `rank` 超时按 23 秒（与正文同档），单独协程执行，不阻塞其它任务
 - 1.10.0 新增 `GET /api/daily`（每日推荐，6 小时缓存，`stale:true` 表示用的是旧结果），与回传无关，APP 只读
 
 ## 6 本项目 1.6 / 1.7 / 1.8 的落实方式
@@ -247,3 +251,28 @@ POST /api/m/sources/sync                   X-Api-Token: …
 
 > 注：`gaysay.com` 这类纯 JS 渲染的站，详情页没有章节链接，书源规则取不到目录，
 > 客户端与服务端表现一致（只有 1 章且无正文），属于书源规则问题，不是 origin 问题。
+
+## 11 1.9：每日推荐（`GET /api/daily`）与 `rank` 代抓
+
+服务端每天抓一次榜单落 `daily.json`，6 小时缓存；网页「搜索 → 每日推荐」直接读它。
+抓取顺序 **起点 → 纵横 → 17K**，全失败则返回磁盘上一次结果并带 `stale:true`。
+起点 `https://www.qidian.com/rank/recom/` 有反爬（202 挑战页），服务端直连基本拿不到，
+所以在有在线手机时先下发 `rank` 任务（12 秒等结果），手机抓不到就继续走纵横。
+
+客户端职责（1.9 实现）：
+
+| 项 | 规定 |
+| --- | --- |
+| 领取 | 照旧 `GET /api/m/remote/pending`，`type=rank` 与 search/toc/content 同一队列 |
+| 抓取 | 浏览器 UA + `Accept-Language: zh-CN`，8 秒连接 / 8 秒读取，跟随跳转 |
+| 判定反爬 | 响应正文 < 10 000 字节直接判失败（挑战页只有几 KB，解析只会得到 0 本） |
+| 解析 | 起点 `.book-img-text li` / `.rank-list li`（书名 `h2 a`、作者 `.author`、封面首个 `img`）；纵横 `.zh-modules-rank-book`；17K `a[href*="/book/"]` 且路径形如 `/book/<数字>.html` |
+| 回传 | `{source,url,books:[{rank,name,url,author,cover,score}]}`，`rank` 按抓取顺序补 1..N，`url` 转绝对地址、按 url 去重 |
+| 失败 | `{ok:false,error:"…"}`；服务端拿不到就不再等，改走自己的纵横 / 17K 解析 |
+
+自测清单（1.9 已跑）：
+
+- [x] 模拟器装 1.9 包，前台桥接服务连上 `1.11.2`，`GET /api/m/remote/pending` 能领到任务
+- [x] `GET /api/daily` 返回 30 本、`source=纵横`（起点被反爬时由服务端降级，客户端此时回 ok:false）
+- [x] 手工 POST `/api/remote/job {type:rank,payload:{url:起点}}` → 手机端收到、执行、回结果；起点头像被拦时 error 文案可读
+- [x] 其余回传（推书 / 进度 / 封面 / 缓存 / 书源）字段未变，1.8 的 9 本实测结论继续有效

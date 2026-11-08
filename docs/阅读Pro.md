@@ -13,7 +13,7 @@ room 2.6.0 / okhttp 4.11.0 / compileSdk 34）在 JDK 17 上可稳定构建，且
 | `app/build.gradle` | `applicationId` → `io.legado.pro`（与官方版、API19 版共存） |
 | `app/build.gradle` | `minSdk 19 → 24`，`targetSdk 30 → 33` |
 | `app/build.gradle` | 新增 `-PtargetAbi=armv7/arm64` 开关，决定 `abiFilters` 与产物名后缀 |
-| `app/build.gradle` | `versionCode 19001 → 10800`（当前 1.8），输出名 `${appName}_${flavor}_${version}${abiSuffix}.apk` |
+| `app/build.gradle` | `versionCode 19001 → 10900`（当前 1.9），输出名 `${appName}_${flavor}_${version}${abiSuffix}.apk` |
 | `modules/book`、`modules/rhino1.7.3` | `minSdk 24`、`targetSdk 33`，与主模块一致 |
 | `res/values*/strings.xml` | `app_name` → 阅读Pro（含 zh / zh-HK / zh-TW 三个语言目录） |
 | `AndroidManifest.xml` | 删除 `<uses-sdk tools:overrideLibrary=...>`（三方库 minSdk 21 < 24，合并无需 override） |
@@ -59,8 +59,8 @@ Android 7.0 起系统按 v2 校验，v1 只是给仍做 JAR 校验的老安装�
 
 | APK | 体积 | ABI | 校验 |
 | --- | --- | --- | --- |
-| `yuedu_pro_app_1.8-armv7.apk` | 17.51 MB | armeabi-v7a | `sdkVersion 24` / `targetSdkVersion 33` / `io.legado.pro` / v2 签名 |
-| `yuedu_pro_app_1.8-arm64.apk` | 17.56 MB | arm64-v8a | 同上 |
+| `yuedu_pro_app_1.9-armv7.apk` | 17.52 MB | armeabi-v7a | `sdkVersion 24` / `targetSdkVersion 33` / `io.legado.pro` / v2 签名 |
+| `yuedu_pro_app_1.9-arm64.apk` | 17.56 MB | arm64-v8a | 同上 |
 
 原生库（每个 APK 只带自己那一套）：
 
@@ -74,6 +74,23 @@ DEX：6 个（`classes.dex` ~8.6MB、`classes2.dex` 仅 2.9KB、`classes3.dex` ~
 - **真机运行验证**：测试机 adb 掉线，未实测启动、搜索、阅读。接上 USB 后跑 `scripts/verify_device.bat`。
 - 应用内「检查更新」仍指向 Legado 官方仓库，换成本仓库的 Release 需要改 `AppUpdateService` 的地址。
 - 未做混淆/资源压缩（`minifyEnabled false`），体积偏大，后续可按需开启。
+
+## 1.9：跟进文档 §15，软总线支持 rank 代抓榜单
+
+`docs/APP同步接口.md` 新增 **§15 每日推荐（`GET /api/daily`）**：服务端按「起点 → 纵横 → 17K」
+依次抓榜单，起点有反爬时先让软总线上的在线手机抓，任务类型 `rank`、`payload={url}`。
+`docs/更新日志.md` 补了 1.10.0–1.11.2 的版本记录（§16 缓存同步、§17 书源双向同步本客户端 1.8 已实现，复核无差异）。
+
+代码只动一处（`model/FnReaderRemote.kt`、`service/FnReaderBridgeService.kt`，与 A4 同构）：
+
+| 改动 | 说明 |
+| --- | --- |
+| `FnReaderRemote.execute` 增加 `"rank"` 分支 | 以前收到 rank 直接回 `ok:false`（1.8 及更早写死只认 search/toc/content） |
+| `rank(payload)` | 浏览器 UA 抓 `payload.url`；不足 10 KB 视为反爬页直接报错；Jsoup 按三套选择器解析（起点 `.book-img-text li` / `.rank-list li`、纵横 `.zh-modules-rank-book`、17K `/book/<id>.html`），去重后补 `rank` 序号 |
+| 回传结构 | `{source,url,books:[{rank,name,url,author,cover,score}]}`，服务端直接当 `/api/daily` 的 books 用 |
+| `timeoutOf("rank")` | 23 秒（与正文同档，抓页面本身就慢） |
+
+反爬页与「解析出 0 本」都会回 `ok:false` + 原因，服务端照旧降到纵横 / 17K，网页端不会白屏。
 
 ## 1.8：origin 必须是书源真实地址（修「没有书源」）
 

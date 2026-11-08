@@ -199,7 +199,8 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
         addMethod(
             "⑨ 书源双向同步（最后一次修改为准）",
             "按 lastUpdateTime 双向对齐（GET/POST /api/m/sources/sync，文档 §17）：本机改过的书源推到飞牛，"
-                    + "飞牛更进的拉回本地，删除也同步；首次按 bookSourceUrl 合并上传，之后只传本机改过的那几条"
+                    + "飞牛更进的拉回本地（pull / pullDeleted 覆盖本地），删除也同步；"
+                    + "首次按 bookSourceUrl 合并上传，之后只传本机改过的那几条"
         ) { syncSourcesBoth() }
     }
 

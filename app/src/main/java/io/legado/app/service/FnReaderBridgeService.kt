@@ -62,6 +62,7 @@ class FnReaderBridgeService : BaseService() {
             "search" -> JOB_TIMEOUT_SEARCH
             "toc" -> JOB_TIMEOUT_TOC
             "content" -> JOB_TIMEOUT_CONTENT
+            "rank" -> JOB_TIMEOUT_CONTENT
             else -> JOB_TIMEOUT_DEFAULT
         }
     }
@@ -187,7 +188,7 @@ class FnReaderBridgeService : BaseService() {
     }
 
     /**
-     * 跑一个任务并回传。按任务类型定超时（搜索/目录 18 秒、正文 23 秒），
+     * 跑一个任务并回传。按任务类型定超时（搜索/目录 18 秒、正文/榜单 23 秒），
      * 卡住的书源直接判超时，别让飞牛那边一直干等到超时。
      */
     private suspend fun runJob(

@@ -8,6 +8,7 @@ import io.legado.app.data.entities.BookSource
 import io.legado.app.model.webBook.WebBook
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.jsoup.Jsoup
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -19,7 +20,7 @@ import java.net.URL
  * 有些书源要 WebView 或加密接口，飞牛那边跑不了，就把任务丢给手机：
  *   GET  /api/m/remote/pending?wait=&limit=&id=&name=&model=&ver=   领任务（长轮询）
  *   POST /api/m/remote/result                                       回结果
- * 任务类型：search / toc / content，就地用本机的书源规则执行。
+ * 任务类型：search / toc / content（用本机书源规则执行）/ rank（代抓榜单页，文档 §15）。
  *
  * 令牌一律走请求头 X-Api-Token，不放进 URL——URL 会进浏览器历史、反向代理和
  * 服务器日志，令牌留在里面等于一直明文外泄。文档「外网访问 → 安全要点」也是这个口径。
@@ -126,6 +127,7 @@ object FnReaderRemote {
             "search" -> search(job.payload)
             "toc" -> toc(job.payload)
             "content" -> content(job.payload)
+            "rank" -> rank(job.payload)
             else -> throw RemoteException("不支持的任务类型：${job.type}")
         }
     }
@@ -230,6 +232,114 @@ object FnReaderRemote {
             put("paragraphs", paragraphs)
             put("title", chapter.title)
         }
+    }
+
+    // ---------------- 榜单（rank） ----------------
+
+    /*
+     * 服务端抓起点榜单常被反爬挡住（返回 202 挑战页），文档 §15 说「软总线有在线手机就先让手机抓」，
+     * 于是建一个 type=rank、payload={url} 的任务丢下来，手机抓完把结构化的 books 回上去。
+     * 服务端拿到 data 后直接当 /api/daily 的结果用，所以这里必须给 source / url / books。
+     */
+    private suspend fun rank(payload: JSONObject): JSONObject {
+        val url = payload.optString("url").ifEmpty { "https://www.qidian.com/rank/recom/" }
+        val html = httpGetText(url)
+        // 起点被反爬时会返回一段很短的挑战页，解析它只会得到空气，尽早报错让服务端换源
+        if (html.length < 10000) {
+            throw RemoteException("榜单页只拿到 ${html.length} 字节，八成被反爬拦了：$url")
+        }
+        val doc = Jsoup.parse(html, url)
+        val books = JSONArray()
+        val seen = HashSet<String>()
+        when {
+            url.contains("zongheng.com") -> doc.select(".zh-modules-rank-book").forEach { el ->
+                val a = el.selectFirst(".book-rank--title-text a") ?: return@forEach
+                val name = (a.attr("title").ifEmpty { a.text() }).trim()
+                val href = a.attr("href").trim()
+                if (name.isEmpty() || href.isEmpty()) return@forEach
+                val abs = href.toAbsolute(url)
+                if (!seen.add(abs)) return@forEach
+                books.put(JSONObject().apply {
+                    put("name", name)
+                    put("url", abs)
+                    put("author", el.selectFirst(".auther")?.text()?.trim().orEmpty())
+                    put("score", el.selectFirst(".rank-content-default__rank-text")?.text()?.trim().orEmpty())
+                    put("cover", "")
+                })
+            }
+            url.contains("17k.com") -> doc.select("a[href*=\"/book/\"]").forEach { a ->
+                val href = a.attr("href").trim()
+                if (!Regex("/book/\\d+\\.html").containsMatchIn(href)) return@forEach
+                val name = (a.attr("title").ifEmpty { a.text() }).trim()
+                if (name.isEmpty() || name.length > 40) return@forEach
+                val abs = href.toAbsolute(url)
+                if (!seen.add(abs)) return@forEach
+                books.put(JSONObject().apply {
+                    put("name", name)
+                    put("url", abs)
+                    put("author", "")
+                    put("score", "")
+                    put("cover", "")
+                })
+            }
+            else -> doc.select(".book-img-text li, .rank-list li").forEach { li ->
+                // 起点推荐榜：书名在 h2 a 里，作者在 .author 里，封面取第一个 img
+                val a = li.selectFirst("h2 a, .book-mid-info h2 a") ?: return@forEach
+                val name = a.text().trim()
+                val href = a.attr("href").trim()
+                if (name.isEmpty() || href.isEmpty()) return@forEach
+                val abs = href.toAbsolute(url)
+                if (!seen.add(abs)) return@forEach
+                books.put(JSONObject().apply {
+                    put("name", name)
+                    put("url", abs)
+                    put("author", li.selectFirst(".author a, .author")?.text()?.trim().orEmpty())
+                    put("cover", li.selectFirst("img")?.attr("src")?.trim().orEmpty())
+                    put("score", "")
+                })
+            }
+        }
+        if (books.length() == 0) throw RemoteException("榜单页解析出 0 本书，页面结构可能变了：$url")
+        // 服务端拿 rank 序号当榜单名次，这里按抓取顺序补上
+        for (i in 0 until books.length()) books.getJSONObject(i).put("rank", i + 1)
+        return JSONObject().apply {
+            put("source", if (url.contains("zongheng.com")) "纵横" else if (url.contains("17k.com")) "17K" else "起点")
+            put("url", url)
+            put("books", books)
+        }
+    }
+
+    /** 抓一段网页文本（榜单页用）：浏览器 UA、跟随跳转、8 秒超时 */
+    private fun httpGetText(url: String): String {
+        var conn: HttpURLConnection? = null
+        try {
+            conn = URL(url).openConnection() as HttpURLConnection
+            conn.connectTimeout = 8000
+            conn.readTimeout = 8000
+            conn.instanceFollowRedirects = true
+            conn.setRequestProperty(
+                "User-Agent",
+                "Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) " +
+                    "Chrome/120.0.0.0 Mobile Safari/537.36"
+            )
+            conn.setRequestProperty("Accept", "text/html,application/xhtml+xml")
+            conn.setRequestProperty("Accept-Language", "zh-CN,zh;q=0.9")
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val body = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+            if (code !in 200..299) throw RemoteException("榜单页返回 HTTP $code")
+            return body
+        } finally {
+            conn?.disconnect()
+        }
+    }
+
+    /** 相对链接补成绝对地址（榜单页里的 href 多半是 /book/xxx） */
+    private fun String.toAbsolute(base: String): String {
+        if (startsWith("http://", true) || startsWith("https://", true)) return this
+        if (startsWith("//")) return "https:" + this
+        val root = runCatching { java.net.URI(base).let { "${it.scheme}://${it.host}" } }.getOrNull() ?: ""
+        return if (startsWith("/")) root + this else root + "/" + this
     }
 
     // ---------------- 网络 ----------------
