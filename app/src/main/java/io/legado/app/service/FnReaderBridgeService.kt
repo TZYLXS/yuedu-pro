@@ -2,6 +2,7 @@ package io.legado.app.service
 
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
@@ -32,9 +33,15 @@ import splitties.init.appCtx
 class FnReaderBridgeService : BaseService() {
 
     companion object {
-        /** 单个任务上限；飞牛 /api/remote/job 最长只等 60 秒 */
-        private const val JOB_TIMEOUT_MS = 45000L
-        private const val TIMEOUT_MESSAGE = "解析超时（45 秒没出结果），这个书源本机也跑不动"
+        /**
+         * 任务上限跟服务端的等待时间对齐（FnReader 1.8.x：搜索/目录 20 秒、正文 25 秒
+         * 等不到就自己退回本机解析）。这里留一点余量后主动判超时，
+         * 免得飞牛那边早就放弃了，手机还在啃一个啃不动的源。
+         */
+        private const val JOB_TIMEOUT_SEARCH = 18000L
+        private const val JOB_TIMEOUT_TOC = 18000L
+        private const val JOB_TIMEOUT_CONTENT = 23000L
+        private const val JOB_TIMEOUT_DEFAULT = 20000L
 
         @Volatile
         var isRun = false
@@ -50,7 +57,24 @@ class FnReaderBridgeService : BaseService() {
         fun stop(context: Context = appCtx) {
             context.stopService(Intent(context, FnReaderBridgeService::class.java))
         }
+
+        private fun timeoutOf(type: String): Long = when (type) {
+            "search" -> JOB_TIMEOUT_SEARCH
+            "toc" -> JOB_TIMEOUT_TOC
+            "content" -> JOB_TIMEOUT_CONTENT
+            else -> JOB_TIMEOUT_DEFAULT
+        }
     }
+
+    /** 软总线设备身份：领任务时一起报上去，网页「设置 → 软总线」里就能看到这台机器 */
+    private val deviceId: String by lazy { AppConst.androidId }
+    private val deviceName: String by lazy { Build.MODEL.ifEmpty { "Android 手机" } }
+    private val deviceModel: String by lazy {
+        val maker = Build.MANUFACTURER.orEmpty()
+        val model = Build.MODEL.orEmpty()
+        if (maker.isEmpty() || model.startsWith(maker, true)) model else "$maker $model"
+    }
+    private val appVersion: String by lazy { AppConst.appInfo.versionName }
 
     private var loopJob: Job? = null
     private var notificationContent = "手机解析待命：等待飞牛派任务"
@@ -113,24 +137,32 @@ class FnReaderBridgeService : BaseService() {
                 // 保活心跳：连上之后每 60 秒探一次 /api/m/info，
                 // 一来确认令牌没被重置、地址没变，二来让「在线」是持续状态而不是开局一次性。
                 if (System.currentTimeMillis() - lastInfoAt > 60_000L) {
-                    val version = runCatching { FnReaderRemote.info(base, token) }.getOrNull()
+                    val heartbeat = runCatching { FnReaderRemote.info(base, token) }
                     lastInfoAt = System.currentTimeMillis()
-                    onlineText = if (version != null) {
+                    if (heartbeat.isSuccess) {
+                        val version = heartbeat.getOrThrow()
                         putPrefString(FnReaderConfigDialog.KEY_ONLINE, version)
-                        "已连接 FnReader $version　待命中"
+                        onlineText = "已连接 FnReader $version　待命中"
                     } else {
                         putPrefString(FnReaderConfigDialog.KEY_ONLINE, "")
-                        "连不上服务器，重试中"
-                    }
-                    if (version == null) {
+                        onlineText = "连不上服务器：${FnReaderRemote.describeError(heartbeat.exceptionOrNull()!!)}"
                         notificationContent = "$onlineText（$base）"
                         upNotification()
                     }
                 }
                 val jobs = try {
-                    FnReaderRemote.poll(base, token, waitMs = 15000, limit = 5)
+                    FnReaderRemote.poll(
+                        base = base,
+                        token = token,
+                        waitMs = 15000,
+                        limit = 5,
+                        deviceId = deviceId,
+                        deviceName = deviceName,
+                        deviceModel = deviceModel,
+                        appVer = appVersion
+                    )
                 } catch (e: Exception) {
-                    val msg = e.localizedMessage ?: e.javaClass.simpleName
+                    val msg = FnReaderRemote.describeError(e)
                     if (msg != lastError) {
                         lastError = msg
                         notificationContent = "连接失败：$msg（重试中）"
@@ -155,8 +187,8 @@ class FnReaderBridgeService : BaseService() {
     }
 
     /**
-     * 跑一个任务并回传。单个任务最多等 [JOB_TIMEOUT_MS]，卡住的书源直接判超时，
-     * 别让飞牛那边一直干等到 504。
+     * 跑一个任务并回传。按任务类型定超时（搜索/目录 18 秒、正文 23 秒），
+     * 卡住的书源直接判超时，别让飞牛那边一直干等到超时。
      */
     private suspend fun runJob(
         base: String,
@@ -166,15 +198,14 @@ class FnReaderBridgeService : BaseService() {
     ) {
         notificationContent = "正在解析：${job.type}"
         upNotification()
+        val timeout = timeoutOf(job.type)
+        val timeoutMessage = "解析超时（${timeout / 1000} 秒没出结果），这个书源本机也跑不动"
         val result = runCatching {
-            withTimeoutOrNull(JOB_TIMEOUT_MS) { FnReaderRemote.execute(job) }
-                ?: throw FnReaderRemote.RemoteException(TIMEOUT_MESSAGE)
+            withTimeoutOrNull(timeout) { FnReaderRemote.execute(job) }
+                ?: throw FnReaderRemote.RemoteException(timeoutMessage)
         }
         val ok = result.isSuccess
-        val error = result.exceptionOrNull()?.let {
-            if (it is FnReaderRemote.RemoteException) it.localizedMessage
-            else (it.localizedMessage ?: it.javaClass.simpleName)
-        } ?: "解析失败"
+        val error = result.exceptionOrNull()?.let { FnReaderRemote.describeError(it) } ?: "解析失败"
         runCatching {
             FnReaderRemote.submit(
                 base = base,

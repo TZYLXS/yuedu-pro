@@ -14,12 +14,15 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * FnReader 手机端解析桥（服务端 v1.7.26 起）
+ * FnReader 手机端解析桥（服务端 v1.7.26 起，1.8.x 增加软总线）
  *
  * 有些书源要 WebView 或加密接口，飞牛那边跑不了，就把任务丢给手机：
- *   GET  /api/m/remote/pending?token=&wait=&limit=    领任务（长轮询）
- *   POST /api/m/remote/result?token=                  回结果
+ *   GET  /api/m/remote/pending?wait=&limit=&id=&name=&model=&ver=   领任务（长轮询）
+ *   POST /api/m/remote/result                                       回结果
  * 任务类型：search / toc / content，就地用本机的书源规则执行。
+ *
+ * 令牌一律走请求头 X-Api-Token，不放进 URL——URL 会进浏览器历史、反向代理和
+ * 服务器日志，令牌留在里面等于一直明文外泄。文档「外网访问 → 安全要点」也是这个口径。
  */
 object FnReaderRemote {
 
@@ -44,14 +47,26 @@ object FnReaderRemote {
 
     /**
      * 领任务。wait 最多 30 秒，服务端没有任务就挂着等。
+     *
+     * 1.8.0 起带上 id / name / model / ver，服务端会自动把本机登记成
+     * 「软总线」里的解析设备（网页 设置 → 软总线 能看到它、也能单独暂停它）。
      */
     suspend fun poll(
         base: String,
         token: String,
         waitMs: Int = 15000,
-        limit: Int = 5
+        limit: Int = 5,
+        deviceId: String = "",
+        deviceName: String = "",
+        deviceModel: String = "",
+        appVer: String = ""
     ): List<Job> = withContext(Dispatchers.IO) {
-        val url = "$base/api/m/remote/pending?token=${Uri.encode(token)}&wait=$waitMs&limit=$limit"
+        val query = StringBuilder("?wait=$waitMs&limit=$limit")
+        if (deviceId.isNotEmpty()) query.append("&id=").append(Uri.encode(deviceId))
+        if (deviceName.isNotEmpty()) query.append("&name=").append(Uri.encode(deviceName))
+        if (deviceModel.isNotEmpty()) query.append("&model=").append(Uri.encode(deviceModel))
+        if (appVer.isNotEmpty()) query.append("&ver=").append(Uri.encode(appVer))
+        val url = "$base/api/m/remote/pending$query"
         val (code, body) = request("GET", url, token, null, waitMs + 15000)
         if (code !in 200..299) throw RemoteException(explain(code, body))
         val array = runCatching { JSONObject(body).optJSONArray("jobs") }.getOrNull()
@@ -98,7 +113,7 @@ object FnReaderRemote {
             if (data != null) put("data", data)
             if (!error.isNullOrBlank()) put("error", error)
         }
-        val url = "$base/api/m/remote/result?token=${Uri.encode(token)}"
+        val url = "$base/api/m/remote/result"
         val (code, body) = request("POST", url, token, payload.toString(), 20000)
         if (code !in 200..299) throw RemoteException(explain(code, body))
     }
@@ -253,11 +268,29 @@ object FnReaderRemote {
         val plain = body.trim()
         val lower = plain.lowercase()
         return when {
-            code == 401 || lower.contains("invalid token") -> "令牌不对（在 FnReader 设置 → 手机接入 里核对）"
+            code == 401 || lower.contains("invalid token") || lower.contains("unauthorized") ->
+                "令牌不对或已被重置（FnReader 设置 → 手机接入 → 重置后，App 里要重新填）"
+            code == 403 -> "令牌没有访问这个接口的权限（HTTP 403）"
+            code == 404 -> "接口不存在：地址里可能带了多余的路径（HTTP 404）"
             plain.isEmpty() -> "服务端没有返回内容（HTTP $code）"
             plain.startsWith("<") -> "地址返回的是网页，不是手机接口"
+            code >= 500 -> "服务端出错（HTTP $code）${plain.take(60)}"
             else -> "HTTP $code ${plain.take(80)}"
         }
+    }
+
+    /**
+     * 把网络异常翻成用户能对照着排查的一句话：
+     * 地址不通 / 端口不对 / 证书不受信任，三种原因的处理办法完全不同。
+     */
+    fun describeError(e: Throwable): String = when (e) {
+        is RemoteException -> e.message ?: "请求失败"
+        is java.net.SocketTimeoutException -> "等待超时（服务端没响应：端口被挡、服务卡住或网络太慢）"
+        is java.net.UnknownHostException -> "找不到主机（地址写错，或手机 DNS 解析不了这个域名）"
+        is java.net.ConnectException -> "连不上端口（服务没起来 / 端口不对 / 防火墙拦了）"
+        is javax.net.ssl.SSLException -> "证书不受信任（自签或已过期；先换内网 http 地址确认能通）"
+        is java.io.IOException -> "网络错误：${e.message ?: e.javaClass.simpleName}"
+        else -> e.message ?: e.javaClass.simpleName
     }
 
 }
