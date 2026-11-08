@@ -12,6 +12,7 @@ import io.legado.app.constant.NotificationId
 import io.legado.app.model.FnReaderRemote
 import io.legado.app.ui.config.FnReaderConfigDialog
 import io.legado.app.utils.getPrefString
+import io.legado.app.utils.putPrefString
 import io.legado.app.utils.servicePendingIntent
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -96,6 +97,8 @@ class FnReaderBridgeService : BaseService() {
         loopJob?.cancel()
         loopJob = lifecycleScope.launch(Dispatchers.IO) {
             var lastError = ""
+            var onlineText = ""
+            var lastInfoAt = 0L
             while (isActive) {
                 val base = FnReaderRemote.normalizeBase(
                     getPrefString(FnReaderConfigDialog.KEY_SERVER, "").orEmpty()
@@ -106,6 +109,23 @@ class FnReaderBridgeService : BaseService() {
                     upNotification()
                     delay(5000)
                     continue
+                }
+                // 保活心跳：连上之后每 60 秒探一次 /api/m/info，
+                // 一来确认令牌没被重置、地址没变，二来让「在线」是持续状态而不是开局一次性。
+                if (System.currentTimeMillis() - lastInfoAt > 60_000L) {
+                    val version = runCatching { FnReaderRemote.info(base, token) }.getOrNull()
+                    lastInfoAt = System.currentTimeMillis()
+                    onlineText = if (version != null) {
+                        putPrefString(FnReaderConfigDialog.KEY_ONLINE, version)
+                        "已连接 FnReader $version　待命中"
+                    } else {
+                        putPrefString(FnReaderConfigDialog.KEY_ONLINE, "")
+                        "连不上服务器，重试中"
+                    }
+                    if (version == null) {
+                        notificationContent = "$onlineText（$base）"
+                        upNotification()
+                    }
                 }
                 val jobs = try {
                     FnReaderRemote.poll(base, token, waitMs = 15000, limit = 5)
@@ -120,10 +140,14 @@ class FnReaderBridgeService : BaseService() {
                     continue
                 }
                 lastError = ""
+                if (jobs.isEmpty()) {
+                    notificationContent = onlineText.ifEmpty { "已连接　待命中" }
+                    upNotification()
+                }
                 // 每个任务单独一根协程：碰到又慢又卡的书源（要 WebView 之类）
                 // 不会把整条待命堵死，其它任务照样跑。
                 for (job in jobs) {
-                    launch { runJob(base, token, job) }
+                    launch { runJob(base, token, job, onlineText) }
                 }
                 delay(1000)
             }
@@ -134,7 +158,12 @@ class FnReaderBridgeService : BaseService() {
      * 跑一个任务并回传。单个任务最多等 [JOB_TIMEOUT_MS]，卡住的书源直接判超时，
      * 别让飞牛那边一直干等到 504。
      */
-    private suspend fun runJob(base: String, token: String, job: FnReaderRemote.Job) {
+    private suspend fun runJob(
+        base: String,
+        token: String,
+        job: FnReaderRemote.Job,
+        onlineText: String
+    ) {
         notificationContent = "正在解析：${job.type}"
         upNotification()
         val result = runCatching {
@@ -164,6 +193,10 @@ class FnReaderBridgeService : BaseService() {
         } else {
             "解析失败：$error"
         }
+        upNotification()
+        // 干完活回到「在线待命」
+        delay(1200)
+        notificationContent = onlineText.ifEmpty { "已连接　待命中" }
         upNotification()
     }
 

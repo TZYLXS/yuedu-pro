@@ -69,6 +69,19 @@ object FnReaderRemote {
     }
 
     /**
+     * 心跳 / 探活：GET /api/m/info。返回服务器版本号，失败抛异常。
+     * 服务里定时调一次，保证「连上了就一直在线」而不只是开局能连。
+     */
+    suspend fun info(base: String, token: String): String = withContext(Dispatchers.IO) {
+        val url = "$base/api/m/info"
+        val (code, body) = request("GET", url, token, null, 10000)
+        if (code !in 200..299) throw RemoteException(explain(code, body))
+        val obj = runCatching { JSONObject(body) }.getOrNull()
+            ?: throw RemoteException("返回的不是 JSON：${body.take(60)}")
+        obj.optString("version").ifEmpty { obj.optString("app", "FnReader") }
+    }
+
+    /**
      * 回结果：成功带 data，失败带 error。
      */
     suspend fun submit(

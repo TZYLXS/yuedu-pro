@@ -55,6 +55,9 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
 
         /** 手机解析待命开关（1 = 开），服务常驻时飞牛可以把跑不动的书源派过来 */
         const val KEY_BRIDGE = "fnReaderBridgeOn"
+
+        /** 最近一次心跳拿到的服务器版本号，空 = 当前离线 */
+        const val KEY_ONLINE = "fnReaderOnlineVersion"
         private const val DOC_SYNC = "https://github.com/TZYLXS/FnReader/blob/main/docs/APP同步接口.md"
         private const val DOC_APK = "https://github.com/TZYLXS/FnReader/blob/main/docs/APK接入.md"
         private const val DOC_PHONE = "https://github.com/TZYLXS/FnReader/blob/main/docs/手机接入API.md"
@@ -85,7 +88,16 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
         binding.tvTest.onClick { syncFromServer(silent = false) }
         binding.tvSync.onClick { syncFromServer(silent = false) }
         binding.tvCancel.onClick { dismiss() }
-        binding.tvStatus.text = getString(R.string.fnreader_sync_idle)
+        binding.tvStatus.text = if (bridgeOn()) {
+            val online = getPrefString(KEY_ONLINE, "").orEmpty()
+            if (online.isNotEmpty()) {
+                "已连接 FnReader $online（保活中）\n飞牛遇到本机解析不了的书源会派过来"
+            } else {
+                "手机解析待命已开启，正在连接服务器…"
+            }
+        } else {
+            getString(R.string.fnreader_sync_idle)
+        }
         buildMethods()
         // 开关还开着的话，把服务拉起来（进程被杀后重进设置也能恢复待命）
         if (bridgeOn() && !FnReaderBridgeService.isRun) {
@@ -134,6 +146,11 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
             "飞牛跑不了的书源（要 WebView / 加密接口）派给本机解析：开了之后保持后台常驻，"
                     + "网页搜索命中这类书源时由本机执行 search / toc / content 并回传结果"
         ) { toggleBridge() }
+        addMethod(
+            "⑨ 接入书源桥（一个「飞牛书库」源读完所有）",
+            "导入服务端自动生成的单品书源：搜索 / 详情 / 目录 / 正文全部走 /api/m/legado/*，"
+                    + "本机不解析、不装书源规则也能看书；换服务器地址后重新导入一次即可"
+        ) { importBridge() }
     }
 
     private fun bridgeOn(): Boolean = getPrefString(KEY_BRIDGE, "0") == "1"
@@ -439,7 +456,21 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
     private fun importSources() {
         val base = requireServerAndToken() ?: return
         val url = sourcesUrl(base)
-        startActivity<OnLineImportActivity> { data = Uri.parse(url) }
+        // OnLineImportActivity 只认 legado://import/bookSource?src=…，直接丢 http 地址会被当成没 src 参数而立刻退出
+        val link = "legado://import/bookSource?src=${Uri.encode(url)}"
+        startActivity<OnLineImportActivity> { data = Uri.parse(link) }
+    }
+
+    /**
+     * 书源桥：服务端把书架/书源/缓存打包成一个「飞牛书库」源，
+     * 导入后搜索、详情、目录、正文全部由飞牛执行（/api/m/legado 下的三条接口），本机零解析。
+     */
+    private fun importBridge() {
+        val base = requireServerAndToken() ?: return
+        val url = "$base/api/m/booksource?token=${Uri.encode(token())}"
+        val link = "legado://import/bookSource?src=${Uri.encode(url)}"
+        startActivity<OnLineImportActivity> { data = Uri.parse(link) }
+        binding.tvStatus.text = "正在导入书源桥…\n$url"
     }
 
     private fun uploadProgress() {
