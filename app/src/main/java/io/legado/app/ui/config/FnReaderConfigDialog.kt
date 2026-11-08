@@ -18,6 +18,7 @@ import io.legado.app.lib.dialogs.alert
 import io.legado.app.lib.dialogs.selector
 import io.legado.app.lib.theme.ThemeStore
 import io.legado.app.lib.theme.primaryColor
+import io.legado.app.service.FnReaderBridgeService
 import io.legado.app.ui.association.OnLineImportActivity
 import io.legado.app.ui.browser.WebViewActivity
 import io.legado.app.utils.getPrefString
@@ -51,6 +52,9 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
         const val KEY_PREF = "fnReaderServerConfig"
         const val KEY_SERVER = "fnReaderServer"
         const val KEY_TOKEN = "fnReaderToken"
+
+        /** 手机解析待命开关（1 = 开），服务常驻时飞牛可以把跑不动的书源派过来 */
+        const val KEY_BRIDGE = "fnReaderBridgeOn"
         private const val DOC_SYNC = "https://github.com/TZYLXS/FnReader/blob/main/docs/APP同步接口.md"
         private const val DOC_APK = "https://github.com/TZYLXS/FnReader/blob/main/docs/APK接入.md"
         private const val DOC_PHONE = "https://github.com/TZYLXS/FnReader/blob/main/docs/手机接入API.md"
@@ -83,6 +87,10 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
         binding.tvCancel.onClick { dismiss() }
         binding.tvStatus.text = getString(R.string.fnreader_sync_idle)
         buildMethods()
+        // 开关还开着的话，把服务拉起来（进程被杀后重进设置也能恢复待命）
+        if (bridgeOn() && !FnReaderBridgeService.isRun) {
+            runCatching { FnReaderBridgeService.start(requireContext()) }
+        }
     }
 
     private fun savePrefs() {
@@ -120,6 +128,42 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
             "⑦ 接入手册",
             "同步接口、APK 接入、手机接入 API 三份文档都在这里"
         ) { showDocs() }
+        addMethod(
+            if (bridgeOn()) "⑧ 手机解析待命：已开启（点此关闭）"
+            else "⑧ 手机解析待命：已关闭（点此开启）",
+            "飞牛跑不了的书源（要 WebView / 加密接口）派给本机解析：开了之后保持后台常驻，"
+                    + "网页搜索命中这类书源时由本机执行 search / toc / content 并回传结果"
+        ) { toggleBridge() }
+    }
+
+    private fun bridgeOn(): Boolean = getPrefString(KEY_BRIDGE, "0") == "1"
+
+    /**
+     * 手机解析待命开关。开启前先把可用地址定下来（探一次 /api/m/info 同源探测），
+     * 免得服务里拿到的是那个恒回 invalid token 的网页代理地址。
+     */
+    private fun toggleBridge() {
+        val ctx = requireContext()
+        if (bridgeOn()) {
+            putPrefString(KEY_BRIDGE, "0")
+            runCatching { FnReaderBridgeService.stop(ctx) }
+            buildMethods()
+            binding.tvStatus.text = "手机解析待命已关闭"
+            toastOnUi("已关闭手机解析待命")
+            return
+        }
+        val base = serverBase() ?: return
+        if (token().isEmpty()) {
+            toastOnUi("先填访问令牌（FnReader 设置 → 手机接入 里那个）")
+            return
+        }
+        val openBase = resolvedBase ?: base
+        putPrefString(KEY_SERVER, openBase)
+        putPrefString(KEY_BRIDGE, "1")
+        runCatching { FnReaderBridgeService.start(ctx) }
+        buildMethods()
+        binding.tvStatus.text = "手机解析待命已开启，服务器：$openBase\n飞牛遇到本机解析不了的书源会派过来"
+        toastOnUi("已开启，回飞牛网页搜书即可借用本机解析")
     }
 
     private fun addMethod(title: String, desc: String, action: () -> Unit) {
