@@ -37,7 +37,9 @@ Legado（阅读）`3.23.110211` 编译，**minSdk 24 / targetSdk 33**（Android 
 **④ 封面现下再转 base64**
 
 - 本机没有封面文件时，按书的 `coverUrl` 现下载一张（8 秒超时、单张 ≤ 3 MB），转 base64 随书推
-- `Referer` 先用**图片自己的域名**，被 403 再退书源地址（`gdbzkz.la` 的图配 `gdbzkz.com` 会被拦，这条实测踩过）
+- `Referer` **先不带**再逐级退：`gdbzkz.la` 的图带任何 Referer 都 403（不带才 200），另一些站反过来只认自己域名，所以按「空 → 图片域名 → 书源地址」顺序试
+- 有的站把 JPEG 也 gzip 预压过（`Content-Encoding: gzip` 却是 `image/jpeg`），解一层再判格式，否则永远认不出是图片
+- 飞牛书架里封面还是源站外链（不是 `/api/covers/` 本地副本）的书，② 会补推一次，实测 9/9 全部落到 NAS `covers/`
 - 服务端落 `covers/` 后该书 `coverUrl` 自动改指向 `/api/covers/<文件名>`，网页书架不再白图
 
 **⑤ ⑨ 书源同步：每次改/删都带 lastUpdateTime**

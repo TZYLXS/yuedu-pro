@@ -87,7 +87,7 @@ DEX：6 个（`classes.dex` ~8.6MB、`classes2.dex` 仅 2.9KB、`classes3.dex` ~
 | `looksLikeSearchUrl()` | `/search`、`?q=`、`&q=`、`?wd=`、`?keyword=`、`/so/`、`s?ie=` 一律不是详情页，跳过不推 |
 | `pushJson(book, index, cover)` | 推书的 `origin` = `bookSourceUrl`、`originName` = 源名；结果区报「非详情页跳过 N 本」「无匹配书源 N 本」 |
 | `cacheJson(book, folder, files, index, cover)` | ⑧ 缓存补 `layout:"legado"`、`chapters[].file`、`chapters[].raw`（`.nb` 原文）、`origin`/`originName` |
-| `fetchCoverData()` / `downloadCover()` / `fetchCoverBytes()` | 本机没有封面文件时现下（8s 超时、≤3 MB），`Referer` 先用图片域名、403 再退书源地址，转 base64 随书推 |
+| `fetchCoverData()` / `downloadCover()` / `fetchCoverBytes()` / `gunzip()` | 本机没有封面文件、或服务端封面仍是源站外链时现下（8s 超时、≤3 MB），`Referer` 先空、再图片域名、再书源地址，图片被 gzip 预压过就解一层，转 base64 随书推 |
 | `syncSourcesBoth()` | `currentUrls` / `goneUrls`（靠 `fnReaderSourcesSnapshot` 快照）+ `deleted[{bookSourceUrl,lastUpdateTime}]`；`sourceJson()` 给没时间戳的源补当前毫秒；`pull` 覆盖本地 |
 | 文件级工具 | `ORIGIN_PLACEHOLDERS`（`""` / `手机端` / `本地` / `未知` / `导入` / `默认` / `loc_book` / `local` / `null` / `none`）、`isPlaceholderOrigin`、`normSourceUrl`、`hostOfUrl`、`looksLikeSearchUrl` |
 

@@ -42,6 +42,8 @@ import org.json.JSONObject
 import splitties.views.onClick
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.ByteArrayInputStream
+import java.util.zip.GZIPInputStream
 import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URI
@@ -643,7 +645,7 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
                         toProgress.add(book)
                         // 飞牛书架已有这本书但没有封面：把封面补推一次
                         // （/api/m/books 按 bookUrl 合并，只覆盖传上去的字段；带 coverData 时 NAS 落盘）
-                        if (shelfCovers[book.bookUrl].isNullOrEmpty() && hasCover(book)) {
+                        if (needsCoverFix(shelfCovers[book.bookUrl]) && hasCover(book)) {
                             toPush.add(book)
                             coverFix++
                         }
@@ -1048,6 +1050,12 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
      * 只有 http(s) 封面飞牛那边能拉到（或至少能当 URL 存着）；
      * 本机生成的封面是图片缓存 / file: 路径，这种要走 base64 上传，不能当 URL 发。
      */
+    /** 服务端封面仍是源站外链（不是 /api/covers/ 下的本地副本）就当缺封面，补推一次 */
+    private fun needsCoverFix(serverCover: String?): Boolean {
+        val cv = serverCover.orEmpty().trim()
+        return cv.isEmpty() || !cv.contains("/api/covers/")
+    }
+
     private fun remoteCover(url: String?): String? =
         url?.trim()?.takeIf { it.startsWith("http://", true) || it.startsWith("https://", true) }
 
@@ -1097,9 +1105,10 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
 
     private fun downloadCover(book: Book): Pair<String, String>? {
         val url = remoteCover(book.coverUrl) ?: return null
-        // 源站图片多数按「图片自己的域名」校验 Referer（如 gdbzkz.la 的图配 gdbzkz.com 会被 403），
-        // 先拿图片域名试，再退 book.origin（书源地址）
+        // 实测有两种站：① 完全不看 Referer（带任何 Referer 反被 403，如 gdbzkz.la）；
+        // ② 必须带自己域名的 Referer（如部分 txt 站）。所以先空着试，再退图片域名、书源地址。
         val refs = ArrayList<String>()
+        refs.add("")
         val imgHost = hostOfUrl(url)
         if (imgHost != null) refs.add("https://$imgHost/")
         val origin = book.origin.orEmpty().trim()
@@ -1122,6 +1131,8 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
             conn.instanceFollowRedirects = true
             conn.setRequestProperty("User-Agent", COVER_UA)
             conn.setRequestProperty("Accept", "image/*")
+            // 不让服务端对图片再压一层（有些站 gzip_static 会把 jpg 预先压成 .gz）
+            conn.setRequestProperty("Accept-Encoding", "identity")
             if (referer.isNotEmpty()) conn.setRequestProperty("Referer", referer)
             if (conn.responseCode !in 200..299) return null
             val bytes = conn.inputStream.use { ins ->
@@ -1137,13 +1148,33 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
                 }
                 out.toByteArray()
             }
-            if (bytes.size < 8) return null
-            val mime = coverMimeOf(bytes) ?: return null
-            mime to Base64.encodeToString(bytes, Base64.NO_WRAP)
+            // 真遇到服务端硬把图片 gzip 了（Content-Encoding 写死 / 忽略 identity），这里解一层再判格式
+            val raw = if (bytes.size > 2 && bytes[0] == 0x1f.toByte() && bytes[1] == 0x8b.toByte())
+                gunzip(bytes) else bytes
+            if (raw.size < 8 || raw.size > MAX_COVER_BYTES) return null
+            val mime = coverMimeOf(raw) ?: return null
+            mime to Base64.encodeToString(raw, Base64.NO_WRAP)
         } finally {
             conn.disconnect()
         }
     }.getOrNull()
+
+    /** 解 gzip（解压后再卡一次体积上限，防止解压炸弹） */
+    private fun gunzip(bytes: ByteArray): ByteArray = runCatching {
+        GZIPInputStream(ByteArrayInputStream(bytes)).use { ins ->
+            val out = ByteArrayOutputStream()
+            val chunk = ByteArray(8192)
+            var total = 0L
+            while (true) {
+                val n = ins.read(chunk)
+                if (n <= 0) break
+                total += n
+                if (total > MAX_COVER_BYTES) return bytes
+                out.write(chunk, 0, n)
+            }
+            out.toByteArray()
+        }
+    }.getOrDefault(bytes)
 
     /**
      * 书源索引：把「bookSourceUrl → (url, 名字)」「host → 同宿主书源」建好后，

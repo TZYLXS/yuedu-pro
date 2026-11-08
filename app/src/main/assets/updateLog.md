@@ -19,7 +19,7 @@
   - 确实拿不到 origin 时，先用 `bookUrl` 的 host 去书源列表匹配同宿主书源（多源取同名那条），再退按源名唯一匹配；都匹配不到才留空，并在结果里报「无匹配书源 N 本」
   - 搜索页 / 临时跳转（`/search`、`?q=`、`&q=`、`?wd=`、`?keyword=`、`/so/` …）不算书籍详情页，直接跳过并报「非详情页跳过 N 本」
 * ⑧ 缓存载荷按 §16 补齐：`layout:"legado"` + `chapters[].file` + `chapters[].raw`（`.nb` 原文，不做任何处理）+ `origin`/`originName`；即使 origin 补不上，也能靠章节原文离线读正文
-* 封面：本机没有封面文件时按书的封面地址现下（Referer 先用图片自己的域名，被 403 再退书源地址），转 base64 一起推，网页书架与 `cache/<书名>/` 都有图
+* 封面：本机没有封面文件、或飞牛那边的封面还是源站外链（不是 `/api/covers/` 本地副本）时，② 会现下封面转 base64 补推一次（先不带 Referer 试，再退图片域名 / 书源地址；服务端把图片也 gzip 压过的自动解一层），网页书架与 `cache/<书名>/` 都有图
 * ⑨ 每次改/删书源都带 `lastUpdateTime = 现在`：本地改过的按 `bookSourceUrl` 推给飞牛，本机删掉的推 `deleted`（靠书源地址快照识别）；服务端更进的版本 `pull` 回本地覆盖
 * 菜单 ② 文案写明 origin 规则；⑧ 文案补 `layout:legado + chapters[].file/raw + origin`；⑨ 文案补「最后一次修改为准 / 删除也同步」
 * 版本号 1.8（versionCode 10800），与安卓 4.0 版同步
