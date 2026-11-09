@@ -10,6 +10,7 @@ import io.legado.app.base.BaseService
 import io.legado.app.constant.AppConst
 import io.legado.app.constant.IntentAction
 import io.legado.app.constant.NotificationId
+import io.legado.app.model.FnReaderAutoSync
 import io.legado.app.model.FnReaderRemote
 import io.legado.app.ui.config.FnReaderConfigDialog
 import io.legado.app.utils.getPrefString
@@ -17,6 +18,7 @@ import io.legado.app.utils.putPrefString
 import io.legado.app.utils.servicePendingIntent
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -41,7 +43,18 @@ class FnReaderBridgeService : BaseService() {
         private const val JOB_TIMEOUT_SEARCH = 18000L
         private const val JOB_TIMEOUT_TOC = 18000L
         private const val JOB_TIMEOUT_CONTENT = 23000L
+        /**
+         * 简介补全（bookinfo）服务端只等 10 秒（见 docs/APP同步接口.md 18.2「超时 10 秒」），
+         * 手机这边必须比它早放手，否则飞牛早就按原样返回了，我们还在啃一个啃不动的详情页。
+         */
+        private const val JOB_TIMEOUT_BOOKINFO = 9000L
         private const val JOB_TIMEOUT_DEFAULT = 20000L
+
+        /** 检索/目录/正文队列并发数：太大会把站点打到限流，太小又会被慢源拖住 */
+        private const val SEARCH_CONCURRENCY = 2
+
+        /** 书源同步 / 缓存上传的自动节拍：5 分钟一轮，连上就跑 */
+        private const val AUTO_SYNC_INTERVAL = 5 * 60 * 1000L
 
         @Volatile
         var isRun = false
@@ -63,6 +76,7 @@ class FnReaderBridgeService : BaseService() {
             "toc" -> JOB_TIMEOUT_TOC
             "content" -> JOB_TIMEOUT_CONTENT
             "rank" -> JOB_TIMEOUT_CONTENT
+            "bookinfo" -> JOB_TIMEOUT_BOOKINFO
             else -> JOB_TIMEOUT_DEFAULT
         }
     }
@@ -78,6 +92,22 @@ class FnReaderBridgeService : BaseService() {
     private val appVersion: String by lazy { AppConst.appInfo.versionName }
 
     private var loopJob: Job? = null
+
+    /** 一条待办：领回来的任务，连同它回来时用的连接上下文 */
+    private class QueuedJob(
+        val base: String,
+        val token: String,
+        val job: FnReaderRemote.Job,
+        val onlineText: String
+    )
+
+    /**
+     * 软总线上跑两条队列，互不挤占：
+     * - 检索队列（search / toc / content / rank）：并发 2，某个慢源卡住只堵这一条；
+     * - 简介队列（只装 bookinfo，补简介与封面）：单并发，永远不排在检索任务后面。
+     */
+    private val searchQueue = Channel<QueuedJob>(Channel.UNLIMITED)
+    private val infoQueue = Channel<QueuedJob>(Channel.UNLIMITED)
     private var notificationContent = "手机解析待命：等待飞牛派任务"
     private val notificationBuilder by lazy {
         NotificationCompat.Builder(this, AppConst.channelIdDownload)
@@ -124,6 +154,20 @@ class FnReaderBridgeService : BaseService() {
             var lastError = ""
             var onlineText = ""
             var lastInfoAt = 0L
+            var lastAutoSyncAt = 0L
+            // 两条队列各自的常驻工作者：检索 2 并发，简介单并发
+            repeat(SEARCH_CONCURRENCY) {
+                launch {
+                    for (item in searchQueue) {
+                        runJob(item.base, item.token, item.job, item.onlineText)
+                    }
+                }
+            }
+            launch {
+                for (item in infoQueue) {
+                    runJob(item.base, item.token, item.job, item.onlineText)
+                }
+            }
             while (isActive) {
                 val base = FnReaderRemote.normalizeBase(
                     getPrefString(FnReaderConfigDialog.KEY_SERVER, "").orEmpty()
@@ -149,6 +193,19 @@ class FnReaderBridgeService : BaseService() {
                         onlineText = "连不上服务器：${FnReaderRemote.describeError(heartbeat.exceptionOrNull()!!)}"
                         notificationContent = "$onlineText（$base）"
                         upNotification()
+                    }
+                }
+                // ⑧⑨ 不再让人手点：连上服务端后每 5 分钟自动跑一次书源同步 + 缓存上传；
+                // 服务端没这两个接口时各自跳过，不会一直报错。
+                if (System.currentTimeMillis() - lastAutoSyncAt > AUTO_SYNC_INTERVAL) {
+                    lastAutoSyncAt = System.currentTimeMillis()
+                    launch {
+                        val r = runCatching { FnReaderAutoSync.run(base, token) }.getOrNull()
+                        val summary = r?.summary().orEmpty()
+                        if (summary.isNotEmpty()) {
+                            notificationContent = summary
+                            upNotification()
+                        }
                     }
                 }
                 val jobs = try {
@@ -177,10 +234,15 @@ class FnReaderBridgeService : BaseService() {
                     notificationContent = onlineText.ifEmpty { "已连接　待命中" }
                     upNotification()
                 }
-                // 每个任务单独一根协程：碰到又慢又卡的书源（要 WebView 之类）
-                // 不会把整条待命堵死，其它任务照样跑。
+                // 任务按类型分进两条队列：bookinfo（简介/封面）走独立队列，
+                // 不和搜索抢并发；其余统一进检索队列，由 2 个工作者轮流跑。
                 for (job in jobs) {
-                    launch { runJob(base, token, job, onlineText) }
+                    val item = QueuedJob(base, token, job, onlineText)
+                    if (job.type == "bookinfo") {
+                        infoQueue.trySend(item)
+                    } else {
+                        searchQueue.trySend(item)
+                    }
                 }
                 delay(1000)
             }
@@ -214,7 +276,8 @@ class FnReaderBridgeService : BaseService() {
                 id = job.id,
                 ok = ok,
                 data = result.getOrNull(),
-                error = if (ok) null else error
+                error = if (ok) null else error,
+                deviceId = deviceId
             )
         }
         notificationContent = if (ok) {

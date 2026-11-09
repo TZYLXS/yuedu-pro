@@ -13,7 +13,7 @@ room 2.6.0 / okhttp 4.11.0 / compileSdk 34）在 JDK 17 上可稳定构建，且
 | `app/build.gradle` | `applicationId` → `io.legado.pro`（与官方版、API19 版共存） |
 | `app/build.gradle` | `minSdk 19 → 24`，`targetSdk 30 → 33` |
 | `app/build.gradle` | 新增 `-PtargetAbi=armv7/arm64` 开关，决定 `abiFilters` 与产物名后缀 |
-| `app/build.gradle` | `versionCode 19001 → 11000`（当前 1.10），输出名 `${appName}_${flavor}_${version}${abiSuffix}.apk` |
+| `app/build.gradle` | `versionCode 19001 → 20200`（当前 2.0.2），输出名 `${appName}_${flavor}_${version}${abiSuffix}.apk` |
 | `modules/book`、`modules/rhino1.7.3` | `minSdk 24`、`targetSdk 33`，与主模块一致 |
 | `res/values*/strings.xml` | `app_name` → 阅读Pro（含 zh / zh-HK / zh-TW 三个语言目录） |
 | `AndroidManifest.xml` | 删除 `<uses-sdk tools:overrideLibrary=...>`（三方库 minSdk 21 < 24，合并无需 override） |
@@ -59,8 +59,8 @@ Android 7.0 起系统按 v2 校验，v1 只是给仍做 JAR 校验的老安装�
 
 | APK | 体积 | ABI | 校验 |
 | --- | --- | --- | --- |
-| `yuedu_pro_app_1.10-armv7.apk` | 17.52 MB | armeabi-v7a | `sdkVersion 24` / `targetSdkVersion 33` / `io.legado.pro` / v2 签名 |
-| `yuedu_pro_app_1.10-arm64.apk` | 17.56 MB | arm64-v8a | 同上 |
+| `yuedu_pro_app_2.0.2-armv7.apk` | 17.83 MB | armeabi-v7a | `sdkVersion 24` / `targetSdkVersion 33` / `io.legado.pro` / v2 签名 |
+| `yuedu_pro_app_2.0.2-arm64.apk` | 17.88 MB | arm64-v8a | 同上 |
 
 原生库（每个 APK 只带自己那一套）：
 
@@ -74,6 +74,80 @@ DEX：6 个（`classes.dex` ~8.6MB、`classes2.dex` 仅 2.9KB、`classes3.dex` ~
 - **真机运行验证**：测试机 adb 掉线，未实测启动、搜索、阅读。接上 USB 后跑 `scripts/verify_device.bat`。
 - 应用内「检查更新」仍指向 Legado 官方仓库，换成本仓库的 Release 需要改 `AppUpdateService` 的地址。
 - 未做混淆/资源压缩（`minifyEnabled false`），体积偏大，后续可按需开启。
+
+## 2.0.x（versionCode 20200 / 2.0.2）：书架去重、删除墓碑、软总线拆两条队列
+
+### 主线（2.0.0 – 2.0.1）
+
+- **书架同名去重**：同名（不同书源）只留一本，优先保留本地已有 `.nb` 缓存的那本，其余副本进度先并过去再删；
+  推送与自动同步都按这条规则取书
+- **删除墓碑**：手动删掉的书不再被自动同步推回来（记墓碑，服务端再推同一本跳过，通知栏「跳过已删 N 本」）
+- **⑧⑨ 转后台**：缓存上传与书源双向同步连上服务端即自动，每 5 分钟一轮；缓存只传整本下完的
+- 启动页换成「飞牛阅读」竖版毛笔字
+
+### 2.0.2：跟 `docs/APP同步接口.md` §18
+
+- 文档新增 **§18 简介补全：让手机把书籍详情带回来**（`bookinfo` 任务），`docs/更新日志.md` 新增
+  2.0.2 / 2.0.1 / 2.0.0 / 1.11.4 四段
+- `service/FnReaderBridgeService.kt` 拆两条队列：`bookinfo` 进独立 `infoQueue`（单并发），
+  `search` / `toc` / `content` / `rank` 进 `searchQueue`（`SEARCH_CONCURRENCY = 2`），互不挤占
+- `bookinfo` 超时由 23 s 收到 **9 s**（`JOB_TIMEOUT_BOOKINFO = 9000L`），对齐 §18.2「超时 10 秒」：
+  手机先放手，服务端按时按原样返回，不再白等啃不动的详情页
+- `model/FnReaderRemote.kt` 未改：`bookInfo()` 回传 `intro` / `author` / `coverUrl` / `kind` / `wordCount` /
+  `lastChapter` / `totalChapterNum` 与 §18.1 字段表一致，`matchSource()`（source 为空按 host 找源）、
+  `plainText()`（富文本简介转纯文本）在 2.0.1 已落地
+- 两仓 `FnReaderBridgeService.kt` 同构（SHA256 一致），版本 2.0.2 / 20200
+
+## 1.11：lean LEDE 更新日志订阅 + 给 lean 许愿（GitHub）
+
+### 1. lean 的「更新日志」在哪里
+
+`coolsnowwolf/lede` 没有独立 CHANGELOG 文件（`CHANGELOG.md` / `CHANGELOG` / `CHANGELOG.txt` / `docs/README.md` 全部 404，
+`README.md` 200），它唯一的「更新日志」就是 **master 分支的提交历史**。GitHub 给每个仓库都开了 Atom 源，
+所以订阅地址是：
+
+```
+https://github.com/coolsnowwolf/lede/commits/master.atom
+```
+
+### 2. Atom 解析（本版才有的能力）
+
+`RssParserDefault.kt` 原先只认 RSS 2.0 的 `<item>`，Atom 的 `<entry>` 一条都进不来，订阅加进去是空白。改动：
+
+| 位置 | 改动 |
+| --- | --- |
+| 条目态 | `<item>` 与 `<entry>` 同等进入 `insideItem`；`END_TAG` 两个名字都收尾 |
+| 链接 | `<link>` 有 `href` 属性就是 Atom 写法，取 `rel="alternate"` 那条；没有属性才 `nextText()`（RSS 写法） |
+| 摘要/正文 | `<summary>` / `<content>` 映射到 `description` / `content`，并参与封面提取 |
+| 时间 | `<updated>` / `<published>` 走 `atomDate()`：ISO 8601 → 本地 `yyyy-MM-dd HH:mm` |
+| 标题 | `oneLine()` 把缩进与换行压成一行（Atom 的 `<title>` 常带换行缩进） |
+
+### 3. 内置订阅的写入方式
+
+新增 `DefaultData.ensureBuiltinRssSources()`：**只补缺失、不动用户增删**。
+原来的 `importDefaultRssSources()` 是「先 `deleteDefault()` 再插入」，会把用户删掉的默认源每次升级都塞回来，
+所以内置 lean 源走新函数，只在 `upVersion()` 的版本升级分支里调用一次。
+
+内置字段：`sourceUrl=LEDE_RSS_URL`、`sourceName=lean LEDE 更新日志`、`sourceGroup=固件`、
+`singleUrl=false`、`enableJs=false`、`customOrder=6`。
+
+### 4. 给 lean 许愿（GitHub）
+
+GitHub 只允许「从 fork 的分支向上游发 PR」，所以「一键许愿」实际是四步，全部实现在 `model/GithubWish.kt`：
+
+1. `GET /user` 认人（同时探测 `GET /repos/<login>/lede` 是否已有 fork）
+2. 没 fork → `POST /repos/coolsnowwolf/lede/forks`，然后每 3 秒轮询一次，最多 2 分钟
+3. 在 fork 的 master 上建 `wish-<yyyyMMdd-HHmmss>` 分支 → `PUT /contents/wishlist/<时间>-<账号>.md`
+4. `POST /repos/coolsnowwolf/lede/pulls`，`head=<login>:<branch>`、`base=master`
+
+兜底：`POST /repos/coolsnowwolf/lede/issues`（不想等 fork 时用），返回 Issue 地址。
+
+UI 用 App 自带控件（`BaseDialogFragment` + `dialog_github_wish.xml`，与「接入 FnReader 服务器」同一套观感）：
+token 输入 / 登录·退出登录 / 账号状态行 / 多行许愿框 / 「提交 PR」·「改发 Issue」/ 结果行（成功后可点开）。
+
+token 存 `SharedPreferences`（`githubWishToken` / `githubWishLogin`），不进备份、不写日志。
+权限：classic token 勾 `public_repo`；细粒度 token 要 `Contents` 读写 + `Pull requests` 读写，
+自动 fork 还需 `Repository creation`（`403` 时界面回显 GitHub 原文并给出这条建议）。
 
 ## 1.10：跟进 `docs/更新日志.md` 1.11.3，无代码改动
 

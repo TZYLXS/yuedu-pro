@@ -6,11 +6,13 @@ import android.view.Menu
 import android.view.MenuItem
 import android.view.View
 import androidx.preference.Preference
+import androidx.lifecycle.lifecycleScope
 import io.legado.app.R
 import io.legado.app.base.BaseFragment
 import io.legado.app.constant.EventBus
 import io.legado.app.constant.PreferKey
 import io.legado.app.databinding.FragmentMyConfigBinding
+import io.legado.app.help.DefaultData
 import io.legado.app.help.config.ThemeConfig
 import io.legado.app.lib.dialogs.selector
 import io.legado.app.lib.prefs.NameListPreference
@@ -26,10 +28,12 @@ import io.legado.app.ui.book.toc.rule.TxtTocRuleActivity
 import io.legado.app.ui.config.ConfigActivity
 import io.legado.app.ui.config.ConfigTag
 import io.legado.app.ui.config.FnReaderConfigDialog
+import io.legado.app.ui.config.GithubWishDialog
 import io.legado.app.ui.dict.rule.DictRuleActivity
 import io.legado.app.ui.file.FileManageActivity
 import io.legado.app.ui.main.MainFragmentInterface
 import io.legado.app.ui.replace.ReplaceRuleActivity
+import io.legado.app.ui.rss.article.RssSortActivity
 import io.legado.app.ui.widget.dialog.TextDialog
 import io.legado.app.utils.LogUtils
 import io.legado.app.utils.getPrefBoolean
@@ -41,6 +45,9 @@ import io.legado.app.utils.setEdgeEffectColor
 import io.legado.app.utils.showDialogFragment
 import io.legado.app.utils.startActivity
 import io.legado.app.utils.viewbindingdelegate.viewBinding
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MyFragment() : BaseFragment(R.layout.fragment_my_config), MainFragmentInterface {
 

@@ -26,4 +26,14 @@
         app:showAsAction="always"
         tools:ignore="AlwaysShowAction" />
 
+    <item
+        android:id="@+id/menu_lede_changelog"
+        android:title="@string/lede_changelog"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/menu_github_wish"
+        android:title="@string/github_wish_entry"
+        app:showAsAction="never" />
+
 </menu>

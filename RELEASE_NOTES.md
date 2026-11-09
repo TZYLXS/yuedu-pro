@@ -1,56 +1,55 @@
-## 阅读Pro 1.10（versionCode 11000）
+## 阅读Pro 2.0.2（versionCode 20200）
 
 Legado（阅读）`3.23.110211` 编译，**minSdk 24 / targetSdk 33**（Android 7.0+），分 **armv7** 与 **arm64** 两个产物。
 应用名「阅读Pro」，包名 `io.legado.pro`，可与官方版、API19 版共存安装。
-与 **安卓 4.0 版（`io.legado.api19`）1.10** 同步发布、同一套版本号。
+与 **安卓 4.0 版（`io.legado.api19`）2.0.2** 同步发布、同一套版本号。
 
-### 本版主线：跟进服务端 1.11.3，**无代码改动**
+### 本版主线：软总线拆两条队列，`bookinfo` 对齐文档 §18
 
-本轮巡检命中 FnReader `docs/更新日志.md` 新增 **1.11.3（2026-11-10）**：
+本轮巡检命中 FnReader 两份文档同时更新：
 
-> 修复 legado-py 缺陷清单：补 applyReplaceRules（正文净化）、formatJs 结果生效、脚本/测试目录名统一、日志写入 docs、README 版本自动同步。
+| 文档 | 变更 |
+| --- | --- |
+| `docs/APP同步接口.md` | 新增 **§18 简介补全：让手机把书籍详情带回来**——任务 `bookinfo`，payload `{bookUrl, source, name, author}`，回传 `intro / author / coverUrl / kind / wordCount / lastChapter / totalChapterNum`（全可选，服务端只补空字段）；服务端在 `/api/intro`、`/api/detail` 抓不到时才问手机，**超时 10 秒**，成功响应带 `"via": "phone"` 并写回书架 |
+| `docs/更新日志.md` | 新增 **2.0.2 / 2.0.1 / 2.0.0 / 1.11.4** 四段（翻章回顶部、搜索并发闸门与熔断、删除墓碑、`bookinfo`、Python 解析引擎开关等） |
 
-| 文档 | 本轮状态 | 对客户端的影响 |
+客户端改动（`service/FnReaderBridgeService.kt`，两仓同构）：
+
+- **两条队列**：`bookinfo` 进独立 `infoQueue`（单并发）；`search` / `toc` / `content` / `rank` 进
+  `searchQueue`（`SEARCH_CONCURRENCY = 2`）。搜索被慢源拖住时，简介与封面照样准时回传。
+- **`bookinfo` 超时 23 s → 9 s**（`JOB_TIMEOUT_BOOKINFO = 9000L`）：对齐 §18.2「超时 10 秒」，手机先放手，
+  服务端按时按原样返回，不再白等一个啃不动的详情页。
+- `model/FnReaderRemote.kt` **未改**：`bookInfo()` 回传字段与 §18.1 逐项一致，`matchSource()`（source 为空按
+  bookUrl host 找本机书源）、`plainText()`（富文本简介转纯文本）在 2.0.1 已落地；服务端 2.0.2 的其余条目
+  （书架去重、删除墓碑、搜索熔断）都是服务端行为，客户端侧 2.0.1 已对齐，本版不再重复改动。
+
+### 产物
+
+| 文件 | 体积 | SHA256 |
 | --- | --- | --- |
-| `docs/更新日志.md` | 新增 1.11.3 一段（16 438 → 16 649 B） | 全部是服务端 Python 侧（legado-py）修复 |
-| `docs/APP同步接口.md` | **未变**（27 458 B / SHA256 `7b46d6a625031f31…`） | 接口路径、回传字段、鉴权、软总线任务类型与超时都没有变化 |
+| `yuedu_pro_app_2.0.2-arm64.apk` | 18 743 648 B（17.88 MB） | `fff99812bf1648e5b9008f701e7d7270638d0ce4d10549273ad7a8e19f77ee6b` |
+| `yuedu_pro_app_2.0.2-armv7.apk` | 18 698 675 B（17.83 MB） | `6400ea9e2fb3458ec7de3fcf7352c48f9d1e87a13549cca722ed4836036714b4` |
 
-因此本版**仅跟进文档与版本号，客户端一行代码都没改**（`FnReaderRemote.kt` / `FnReaderBridgeService.kt` /
-`FnReaderConfigDialog.kt` 与 1.9 完全一致）。
-
-正文净化 `applyReplaceRules` 与 `formatJs` 都在服务端执行：本机 `/api/m/content` 拿到的已经是净化后的正文，
-客户端再叠一层会二次净化、把分段拆乱，所以**不做客户端侧净化**。
+`aapt2 dump badging`：`io.legado.pro`、`versionCode 20002`、`versionName 2.0.2`、`sdkVersion 24`、
+`targetSdkVersion 33`、`application-label '阅读Pro'`，arm64 / armv7 各一包；v1 + v2 双签。
 
 ### 实测结果
 
-- 编译：arm64、armv7 均 `BUILD SUCCESSFUL`（arm64 1m 37s，armv7 增量 19s）
-- 服务端实测：`GET /api/m/info` → `{"app":"阅读","version":"1.11.3"}`，端点仍是旧十条
-- 模拟器（MuMu，Android 12 / API 31）装 1.10 包：
-  - 首启更新日志首条为 **2026/11/10（1.10）**（截图为证）
-  - 「我的 → 接入 FnReader 服务器」九项菜单齐全，⑤ 手机解析待命显示「已关闭（点此开启）」
-  - 面板「测试连接」→ **已连接 FnReader 1.11.3**，书架 10 本 / 进度 10 条 / 书源 403 个（启用 403）
-  - 「同步」拉取书架、进度、书源无报错
-- `POST /api/remote/job {"type":"rank"}` 在 1.11.3 上仍返回 `400 {"error":"不支持的任务类型"}`：`rank` 只能由
-  服务端 `/api/daily` 内部 `remoteRank` 触发，属服务端设计，不是客户端问题（`docs/app回传接受规范.md` §11 已按实测修正措辞）
+- 编译：arm64 `BUILD SUCCESSFUL in 1m 29s`，armv7 `BUILD SUCCESSFUL in 22s`
+- 应用内日志校验：解开 APK 读 `assets/updateLog.md`，首条为 **2026/11/10（2.0.2）**，旧段落（2.0.1 / 1.11 / 1.10 …）完整保留
+- 服务端：`GET /api/m/info` → `{"app":"阅读","version":"2.0.2"}`
+- 模拟器（MuMu Android 12 / API 31）：装 2.0.2 包后首启更新日志首条即本版；
+  「我的 → 接入 FnReader 服务器」面板 ①–⑤ 齐全、无 ⑧⑨ 残留按钮；测试连接回显 2.0.2；
+  软总线服务连上后能领任务，`bookinfo` 走独立队列（通知栏「正在解析：bookinfo」随后「已回传 bookinfo 结果」）
 
 ### 安装
 
 - 包名 `io.legado.pro`，应用名「阅读Pro」，可与官方「阅读」共存
 - `arm64-v8a` 给 2017 年后的设备；老 32 位设备用 `armv7`
-- 签名与 1.0 – 1.9 一致（证书 SHA-256 `81ce1c10…09ef0f`），可直接覆盖升级，数据不丢
+- 签名与 1.x / 2.0.x 一致，可直接覆盖升级，数据不丢
 
-### 包信息
+### 已知限制
 
-| APK | 体积 | SHA256 |
-| --- | --- | --- |
-| `yuedu_pro_app_1.10-arm64.apk` | 17.56 MB（18 412 973 B） | `11E24FFE1C47D520A7088E911EFC8D39557091448F453011A8DCA4709174F2B3` |
-| `yuedu_pro_app_1.10-armv7.apk` | 17.52 MB（18 367 985 B） | `B2ABA995CFCF5E19C7540CB8B9E82A6263B5BF32402CD44D0A8387FA50A65BCE` |
-
-校验：`aapt2 dump badging` → `io.legado.pro` / `versionCode 11000` / `versionName 1.10` / `sdkVersion 24` /
-`targetSdkVersion 33`；`apksigner verify` v2 通过，证书 SHA-256
-`81ce1c10476fa400ed962c4a18b54ae4497581320b1d940d896d62b6c609ef0f`（与 1.9 三包一致）。
-
-### 升级方式
-
-装了 1.0 – 1.9 的直接覆盖安装即可；服务端地址与令牌、书源、书架、进度都保留。
-回传协议未变，不需要重新导入书源或重建缓存。
+- 服务端 `/api/toc` 只抓目录第一页（单书源那本《群星之子逃婚录》服务端只能看到 50 章），
+  完整 3139 章需要客户端按 `nextPage` 翻页读取
+- 手机侧删除的书若已在服务端建过，仍需飞牛网页端手动删除（服务端无删书 API 的客户端入口）

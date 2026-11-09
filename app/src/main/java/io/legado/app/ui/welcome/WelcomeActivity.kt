@@ -48,6 +48,8 @@ open class WelcomeActivity : BaseActivity<ActivityWelcomeBinding>() {
                             binding.ivBook.visible(getPrefBoolean(PreferKey.welcomeShowIconDark))
                             binding.tvGzh.visible(getPrefBoolean(PreferKey.welcomeShowTextDark))
                             window.decorView.background = BitmapDrawable(resources, it)
+                            // 自定义启动图接管背景，隐藏内置「飞牛阅读」大图
+                            binding.ivSplash.visible(false)
                             return
                         }
                     }
@@ -58,6 +60,8 @@ open class WelcomeActivity : BaseActivity<ActivityWelcomeBinding>() {
                             binding.ivBook.visible(getPrefBoolean(PreferKey.welcomeShowIcon))
                             binding.tvGzh.visible(getPrefBoolean(PreferKey.welcomeShowText))
                             window.decorView.background = BitmapDrawable(resources, it)
+                            // 自定义启动图接管背景，隐藏内置「飞牛阅读」大图
+                            binding.ivSplash.visible(false)
                             return
                         }
                     }

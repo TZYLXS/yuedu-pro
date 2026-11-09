@@ -14,8 +14,8 @@
 
 | 产物 | 适用设备 | 说明 |
 | --- | --- | --- |
-| `yuedu_pro_app_1.10-arm64.apk` | 2017 年后的手机 / 平板 / 电视盒子（绝大多数） | arm64-v8a，64 位原生库 |
-| `yuedu_pro_app_1.10-armv7.apk` | 老一些的 32 位设备、部分低端盒子 | armeabi-v7a，兼容性优先 |
+| `yuedu_pro_app_2.0.2-arm64.apk` | 2017 年后的手机 / 平板 / 电视盒子（绝大多数） | arm64-v8a，64 位原生库 |
+| `yuedu_pro_app_2.0.2-armv7.apk` | 老一些的 32 位设备、部分低端盒子 | armeabi-v7a，兼容性优先 |
 
 不确定选哪个：先装 arm64，闪退或提示「应用未安装」再换 armv7。
 两者 Java 侧完全一致，只差 APK 里打包的原生库（.so）。
@@ -28,9 +28,38 @@
 | --- | --- |
 | 包名 / 应用名 | `io.legado.pro` / 阅读Pro |
 | minSdk / targetSdk | 24 / 33 |
-| versionCode | 11000（1.10） |
+| versionCode | 20200（2.0.2） |
 | 签名 | v1 (JAR) + v2 都在包里。`jarsigner -verify` 对 v1 报「jar 已验证」；`apksigner` 在 minSdk ≥ 24 时只校验 v2，会把 v1 显示成 false |
 | 依赖底座 | Legado `3.23.110211` |
+
+## 2.0 主线：跟飞牛服务端对齐
+
+2.0.0 – 2.0.2 三轮一次性把书架与软总线捋顺了：
+
+1. **书架同名去重**：同名（不同书源）的书只留一本，优先保留本地已有 `.nb` 缓存的那本，
+   其余副本的阅读进度先并过去再删掉；推送与自动同步都按这个规则取书。
+2. **删除墓碑**：用户手动删掉的书不会被自动同步补回来——同步时记住上一轮服务端推过的书，
+   本地已删的记成墓碑，之后服务端再推同一本一律跳过（通知栏显示「跳过已删 N 本」）。
+3. **⑧⑨ 转后台**：上传本机缓存、书源双向同步不再手点，连上服务端就每 5 分钟自动跑一轮；
+   缓存只上传整本已下完的，通知栏汇总「上传 N 本 / 待命 M 本未下完」。
+4. **软总线两条队列**（2.0.2）：`bookinfo`（简介与封面补全）单并发独立跑，
+   search / toc / content / rank 走检索队列固定 2 并发；搜索被慢源拖住时，简介照样准时回传。
+5. **`bookinfo` 超时 9 秒**（2.0.2）：对齐服务端 `docs/APP同步接口.md` §18.2 的「超时 10 秒」，
+   手机先放手，服务端按时按原样返回，不再白等啃不动的详情页。
+6. **启动页**换成「飞牛阅读」竖版毛笔字。
+
+### lean LEDE 更新日志与许愿（1.11 引入，仍在）
+
+`coolsnowwolf/lede` 没有独立 CHANGELOG，它的「更新日志」就是 master 分支的提交历史。两件事：
+
+- **内置订阅**：`https://github.com/coolsnowwolf/lede/commits/master.atom`（GitHub 官方 Atom 源，分组「固件」），
+  「订阅」页右上角菜单与「我的」页都能进；内置 RSS 解析器已补 Atom（`<entry>` / `<link href>` / `<updated>`）支持。
+- **给 lean 许愿（GitHub）**：`我的 → 给 lean 许愿（GitHub）`，输入框写愿望、点「提交 PR」，
+  App 用你自己的 GitHub 账号 fork lede、建 `wish-<时间>` 分支、写 `wishlist/<时间>-<账号>.md`，再向上游开 PR；
+  不想等 fork 可以点「改发 Issue」。Token 只存本机（SharedPreferences），不进备份、不写日志，退出登录立刻清除。
+
+权限：classic token 勾 `public_repo`；细粒度 token 需要 `Contents` 读写 + `Pull requests` 读写，
+另加 `Repository creation` 才能自动 fork（缺权限时界面直接回显 GitHub 原文与建议）。
 
 ## 接入飞牛服务器（FnReader）
 
@@ -71,31 +100,37 @@
 | 正文 | `GET /api/m/content?token=…&url=<bookUrl>&index=<i>` |
 | 封面 | `GET /api/m/cover?token=…&url=<bookUrl>` |
 
-### 客户端接入面板（我的 → 接入 FnReader 服务器，①–⑨）
+### 客户端接入面板（我的 → 接入 FnReader 服务器，①–⑤）
 
-服务端 1.11.0 起，App 里这个面板能把书架、进度、书源、缓存都双向对齐：
+服务端 2.0.x 起，这个面板负责书架、书源、软总线的对接；缓存上传与书源同步已改自动，不再占按钮：
 
 | 项 | 干什么 | 接口 |
 | --- | --- | --- |
-| ① | 导入书源（推荐接法） | `GET /api/m/sources.json` |
+| ① | 导入书源（推荐接法，含「飞牛书库」源） | `GET /api/m/sources.json` |
 | ② | 全部同步到飞牛书架（新书自动建、重名跳过、封面一起回传） | `POST /api/m/books` + `/api/m/progress/batch` + `/api/m/cover` |
 | ③ | 打开飞牛阅读网页 | 内置浏览器 |
 | ④ | 接入手册 | 同步接口 / APK 接入 / 手机接入 API 三份文档 |
 | ⑤ | 手机解析待命（飞牛跑不了的源派给本机解析） | `GET /api/m/remote/pending` + `POST /api/m/remote/result` |
-| ⑥ | 接入书源桥（一个「飞牛书库」源读完所有） | 服务端生成的 Legado 源 |
-| ⑦ | 查看软总线（哪台设备在代理解析） | `GET /api/bus` |
-| ⑧ | 上传本机缓存到飞牛（网页离线读正文，1.11.0 §16） | `POST /api/m/cache`，传 `.nb` 原文，服务端转码落 `cache/<书名>/` |
-| ⑨ | 书源双向同步（最后一次修改为准，1.11.0 §17） | 首次 `POST /api/m/sources` 合并；之后 `POST/GET /api/m/sources/sync` 按 `lastUpdateTime` 增量 |
 
-⑧ 单次请求上限 30 MB（超了整本跳过），⑨ 首次只做合并上传、不推「全量 + since=0」（服务端会当成整库快照删源，
-详见 `docs/app回传接受规范.md` §9）。
+后台自动动作（连上服务端即开启，每 5 分钟一轮，不再有 ⑧⑨ 按钮）：
 
-### 另外两种接法
+- **缓存上传**：`POST /api/m/cache`，传 `.nb` 原文，服务端转码落 `cache/<书名>/`；单次请求上限 30 MB，超了整本跳过
+- **书源双向同步**：首次 `POST /api/m/sources` 合并；之后 `POST/GET /api/m/sources/sync` 按 `lastUpdateTime` 增量，
+  不推「全量 + since=0」（服务端会当成整库快照删源，详见 `docs/app回传接受规范.md` §9）
 
-- **WebDAV**：`http://<飞牛IP>:1122/dav/`，用户名任意、密码填访问令牌；`/dav/backup/` 可接阅读Pro 的「备份与恢复 → WebDAV」
-- **HTTP API**：`GET /api/m/shelf | /toc | /content | /cover`、`GET /api/m/search?key=`、`POST /api/m/progress`，请求头 `X-Api-Token`
+### 软总线任务类型
 
-详见 FnReader 的 [docs/手机接入API.md](https://github.com/TZYLXS/FnReader/blob/main/docs/手机接入API.md) 与 [docs/APK接入.md](https://github.com/TZYLXS/FnReader/blob/main/docs/APK接入.md)。
+`GET /api/m/remote/pending` 派下来的任务由手机用本机书源规则跑完，再 `POST /api/m/remote/result` 回传：
+
+| 类型 | 手机干什么 | 超时 |
+| --- | --- | --- |
+| `search` | 本机书源搜索；站点限流时用本机书架同源同名兜底 | 18 s |
+| `toc` | 本机书源抓目录 | 18 s |
+| `content` | 本机书源抓正文 | 23 s |
+| `rank` | 本机书源抓榜单 | 23 s |
+| `bookinfo` | 用本机书源详情规则补简介 / 封面 / 作者 / 分类 / 字数 / 最新章节 / 章数 | 9 s（服务端等 10 s） |
+
+队列：`bookinfo` 单并发独立队列；其余四种走检索队列、2 并发。
 
 ## 与「阅读（API19 版）」的区别
 
@@ -107,7 +142,7 @@
 | targetSdk | 33 | 30 |
 | 4.4 兼容补丁 | 保留但不再触发（TLS1.2 兜底、TTS 三参、PFD 回退等） | 全局生效 |
 
-两者可以同时装在一台设备上，书源与书架各自独立。
+两者可以同时装在一台设备上，书源与书架各自独立。两仓共用版本号（当前 2.0.2 / 20200）。
 
 ## 构建
 

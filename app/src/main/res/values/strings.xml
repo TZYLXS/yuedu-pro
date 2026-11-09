@@ -1146,4 +1146,36 @@
     <string name="keep_enable">Retain Enabled Status</string>
     <string name="preview_image_by_click">Click to preview image</string>
     <string name="default_home_page">Default HomePage</string>
+
+    <!-- lean LEDE 更新日志订阅 / 给 lean 许愿 -->
+    <string name="lede_changelog">lean LEDE 更新日志</string>
+    <string name="lede_changelog_s">coolsnowwolf/lede 的 master 提交订阅（GitHub Atom），点开看最近改动</string>
+    <string name="github_wish_entry">给 lean 许愿（GitHub）</string>
+    <string name="github_wish_entry_s">登录 GitHub，一键把许愿做成 PR 提到 coolsnowwolf/lede</string>
+    <string name="github_wish_title">给 lean 许愿（GitHub）</string>
+    <string name="github_wish_desc">登录 GitHub 后可一键把许愿做成 PR 提到 coolsnowwolf/lede：先 fork 你的 lede，在里面加一个 wishlist 文件，再向上游开 PR；不想走 fork 可以改发 Issue。token 只存本机，不进备份。</string>
+    <string name="github_wish_token_hint">GitHub Token（classic 需勾 public_repo）</string>
+    <string name="github_wish_login">登录</string>
+    <string name="github_wish_logout">退出登录</string>
+    <string name="github_wish_not_login">未登录</string>
+    <string name="github_wish_logged_in">已登录：%1$s</string>
+    <string name="github_wish_ready">已登录，可以许愿了</string>
+    <string name="github_wish_logging_in">正在验证 token…</string>
+    <string name="github_wish_login_ok">已登录：%1$s（公开仓库 %2$d 个），lede fork：%3$s</string>
+    <string name="github_wish_fork_yes">已存在</string>
+    <string name="github_wish_fork_no">还没有，首次许愿会自动 fork</string>
+    <string name="github_wish_login_fail">登录失败：%1$s</string>
+    <string name="github_wish_logged_out">已退出登录，token 已从本机删除</string>
+    <string name="github_wish_need_token">先填入 GitHub Token</string>
+    <string name="github_wish_need_login">先登录 GitHub</string>
+    <string name="github_wish_need_wish">先写许愿内容</string>
+    <string name="github_wish_start_pr">开始许愿（PR 流程）…</string>
+    <string name="github_wish_start_issue">开始许愿（Issue 流程）…</string>
+    <string name="github_wish_done">提交成功，点这行打开：%1$s</string>
+    <string name="github_wish_fail">提交失败：%1$s</string>
+
+    <string name="github_wish_input_hint">许愿内容：希望 lean 加什么、修什么，写清场景更容易被采纳</string>
+    <string name="github_wish_submit">提交 PR</string>
+    <string name="github_wish_issue">改发 Issue</string>
+
 </resources>

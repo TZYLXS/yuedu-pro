@@ -12,6 +12,39 @@
 * 正文出现缺字漏字、内容缺失、排版错乱等情况，有可能是净化规则或简繁转换出现问题。
 * 漫画源看书显示乱码，**阅读与其他软件的源并不通用**，请导入阅读的支持的漫画源！
 
+**2026/11/10（2.0.2）**
+
+* 软总线拆队列：`bookinfo`（简介/封面补全）走独立队列、单并发，不再和 search / toc / content 抢并发；搜索被慢源拖住时，简介与封面照样准时回传
+* 检索队列（search / toc / content / rank）固定 2 并发，慢源只堵自己那一路，不会把整条待命堵死
+* `bookinfo` 超时从 23 秒收紧到 9 秒，对齐 `docs/APP同步接口.md` 18.2 的「超时 10 秒」：手机先放手，服务端按时按原样返回，不再白等一个啃不动的详情页
+* 跟进 `docs/APP同步接口.md` 新增第 18 章「简介补全：让手机把书籍详情带回来」：任务 payload（bookUrl / source / name / author）与回传字段（intro、author、coverUrl、kind、wordCount、lastChapter、totalChapterNum）逐项核对一致；`source` 为空时按 bookUrl 的 host 匹配本机书源，服务端 `via: phone` 回写书架
+* 紧跟服务端 `docs/更新日志.md` 2.0.2：本客户端不改服务端行为，只对齐上述总线任务；上一版 2.0.1 的书架去重 / 删除墓碑 / `bookinfo` 字段照旧
+
+**2026/11/10（2.0.1）**
+
+* 适配 FnReader 服务端 2.0.1 新增软总线任务类型 `bookinfo`（详情/简介补全）：回传 intro、author、coverUrl、kind、wordCount、lastChapter、totalChapterNum，拿不到的字段一律省略不填；任务里 source 为空时用 bookUrl 的 host 匹配本机书源
+* 「lean LEDE 更新日志」「给 lean 许愿（GitHub）」两条入口从「我的 → 设置」页移到「订阅」页右上角菜单，设置页恢复 1.10 样式
+* ⑧ 上传本机缓存、⑨ 书源双向同步改为自动执行：服务端可连通即自动开启，每 5 分钟一轮，设置面板里这两个按钮已移除
+* 缓存上传增加完成度判断：整本已下完才上传，未下完的计入「待命」；通知栏汇总「上传 N 本 / 待命 M 本未下完」
+* 启动页换成「飞牛阅读」竖版毛笔字
+* 书架上同名（不同书源）的书只留一本：优先保留本地已有 `.nb` 缓存的那本，其余副本的阅读进度先并过去再删掉；推送与自动同步都按这个规则取书
+* 用户手动删掉的书不会被自动同步补回来：同步时记住上一轮服务端推过的书，本地已删的记成墓碑，之后服务端再推同一本一律跳过（通知栏显示「跳过已删 N 本」）
+
+**2026/11/10（1.11）**
+
+* 新增 **lean LEDE 更新日志订阅**：`coolsnowwolf/lede` 没有独立的 CHANGELOG（`CHANGELOG.md` / `CHANGELOG` / `CHANGELOG.txt` / `docs/README.md` 全部 404），它的「更新日志」就是 master 分支的提交历史
+  - 内置订阅 `https://github.com/coolsnowwolf/lede/commits/master.atom`（GitHub 官方 Atom 源，分组「固件」、`customOrder=6`），在「订阅」里直接看最近改动；「我的」页也加了同名入口，点一下直接打开
+  - 内置 RSS 解析器补上 **Atom（`<entry>`）** 支持：`<entry>` 与 RSS 的 `<item>` 同等进条目态；`<link>` 认 `href` 属性（取 `rel="alternate"`）、`<summary>`/`<content>` 映射摘要与正文、`<updated>`/`<published>` 的 ISO 8601 时间转本地 `yyyy-MM-dd HH:mm`、标题压成一行 —— 此前这种 Atom 源解析出 0 条，订阅加进去是空白
+  - 内置源用「只补缺失」的写入方式，不碰用户自己增删的订阅（不会像默认源那样每次升级把删掉的源塞回来）
+* 新增 **给 lean 许愿（GitHub）**：`我的` → `给 lean 许愿（GitHub）`，一个输入框 + 提交按钮，登录后一键把许愿做成 PR 提到 `coolsnowwolf/lede`
+  - PR 流程：`GET /user` 认人 → 没 fork 先 `POST /repos/coolsnowwolf/lede/forks` 并等复制完成 → 在 fork 的 master 上建 `wish-<时间>` 分支 → 写 `wishlist/<时间>-<账号>.md` → `POST /repos/coolsnowwolf/lede/pulls`（`head=<账号>:<分支>`，`base=master`）
+  - 兜底 **改发 Issue**：不想等 fork 就直接 `POST /repos/coolsnowwolf/lede/issues`
+  - Token 只存本机 SharedPreferences，不进备份、不写日志；点「退出登录」立刻清掉
+  - 权限要求：classic token 勾 `public_repo`；细粒度 token 需 `Contents` 读写 + `Pull requests` 读写，还要 `Repository creation` 才能自动 fork（缺权限时界面直接回显 GitHub 原文与建议，不吞错）
+* 「我的」页新增两条入口：`lean LEDE 更新日志`、`给 lean 许愿（GitHub）`
+* FnReader 侧：服务端 `1.11.3` 的 `docs/APP同步接口.md` 本轮无新增字段/接口，软总线任务类型与超时未变，本版未改 FnReader 对接代码（1.10 已跟进的文档改动照旧）
+* 版本号 1.11（versionCode 11100），与阅读Pro / 安卓 4.0 同步
+
 **2026/11/10（1.10）**
 
 * 跟进 FnReader `docs/更新日志.md` 新增的 **1.11.3（2026-11-10）**：服务端修 legado-py 缺陷清单——补 `applyReplaceRules`（正文净化）、`formatJs` 结果生效、脚本/测试目录名统一、日志写入 `docs`、README 版本自动同步

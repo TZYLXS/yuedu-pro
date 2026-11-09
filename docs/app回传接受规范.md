@@ -1,7 +1,7 @@
 # APP 回传接受规范
 
 > 服务端依据：FnReader `1.11.3`（`docs/APP同步接口.md` 第 4 / 9 / 11 / 13 / 14 / 15 / 16 / 17 章）
-> 客户端：阅读Pro `1.10`（`io.legado.pro`）、安卓4.0 版 `1.10`（`io.legado.api19`）
+> 客户端：阅读Pro `1.11`（`io.legado.pro`）、安卓4.0 版 `1.11`（`io.legado.api19`）
 > 本文写的是**服务端接收侧**的规矩：APP 往飞牛回传什么、字段怎么填、什么会被拒、什么会被合并。
 
 ## 0 通用约定
@@ -279,6 +279,40 @@ POST /api/m/sources/sync                   X-Api-Token: …
 
 ## 12 1.11.3（2026-11-10）：服务端内部修复，接口无变化
 
-服务端 1.11.3 只改 legado-py：补 `applyReplaceRules`（正文净化）、`formatJs` 结果生效、脚本/测试目录名统一、日志写入 `docs`、README 版本自动同步。`docs/APP同步接口.md` 本轮未变（27 458 B / SHA256 `7b46d6a6…`），第 4 / 9 / 11 / 13 / 14 / 15 / 16 / 17 章的字段表与自测清单继续有效，客户端 1.10 无代码改动。
+服务端 1.11.3 只改 legado-py：补 `applyReplaceRules`（正文净化）、`formatJs` 结果生效、脚本/测试目录名统一、日志写入 `docs`、README 版本自动同步。`docs/APP同步接口.md` 本轮未变（27 458 B / SHA256 `7b46d6a6…`），第 4 / 9 / 11 / 13 / 14 / 15 / 16 / 17 章的字段表与自测清单继续有效，客户端 1.11 未改 FnReader 对接代码（新增能力是 lean 订阅与 GitHub 许愿，与回传协议无关）。
 
 实测补记：`POST /api/remote/job {"type":"rank"}` → `400 {"error":"不支持的任务类型"}`；`rank` 只能由服务端 `/api/daily` 内部 `remoteRank` 下发，外部不能直接下单。
+
+## 13 2.0.2（2026-11-10）：`bookinfo` 简介补全 + 软总线两条队列
+
+`docs/APP同步接口.md` 新增 **§18 简介补全：让手机把书籍详情带回来**，`docs/更新日志.md` 新增 2.0.2 / 2.0.1 / 2.0.0 / 1.11.4。
+
+### 13.1 任务与回传字段（与文档逐一核对，客户端已一致）
+
+| 方向 | 字段 | 说明 |
+| --- | --- | --- |
+| 下行 payload | `bookUrl` / `source` / `name` / `author` | `source` 可为空，空时客户端按 `bookUrl` 的 host 匹配本机书源 |
+| 上行 data | `intro` / `author` / `coverUrl` / `kind` / `wordCount` / `lastChapter` / `totalChapterNum` | **全部可选**，拿不到就省略（回空串会被服务端当成「这书没简介」不再重试） |
+
+`intro` 会先把富文本转纯文本（`<br>` 转换行、标签全去、压缩空行）。
+
+### 13.2 服务端什么时候问手机
+
+| 入口 | 触发条件 |
+| --- | --- |
+| `GET /api/intro?name=&author=&url=` | 本地书源 + 晋江都没拿到简介，且传了 `url` |
+| `GET /api/detail?url=&origin=` | 详情页 `intro` 或 `coverUrl` 为空 |
+
+成功响应带 `"via": "phone"` 并写回书架；**超时 10 秒**，拿不到按原样返回，不阻塞页面。
+
+### 13.3 客户端落实（2.0.2）
+
+- 超时：`bookinfo` 由 23 s 收到 **9 s**（`JOB_TIMEOUT_BOOKINFO`），保证比服务端 10 秒窗口早放手
+- 队列：`bookinfo` 走独立 `infoQueue`（单并发）；`search` / `toc` / `content` / `rank` 走 `searchQueue`（2 并发），互不挤占
+- 字段：`FnReaderRemote.bookInfo()` 按上表回传，`source` 为空时 `matchSource()` 按 host 兜底，`plainText()` 洗简介
+
+自测清单：
+
+- [x] 两仓 `FnReaderBridgeService.kt` 同构（双队列 + `JOB_TIMEOUT_BOOKINFO=9000L`），SHA256 一致
+- [x] 首启更新日志首条为本版（`2026/11/10（2.0.2）`），老段落保留
+- [x] 面板 ①–⑤ 与自动同步一致，无 ⑧⑨ 残留按钮

@@ -16,9 +16,11 @@ import io.legado.app.data.appDb
 import io.legado.app.data.entities.RssSource
 import io.legado.app.databinding.FragmentRssBinding
 import io.legado.app.databinding.ItemRssBinding
+import io.legado.app.help.DefaultData
 import io.legado.app.lib.dialogs.alert
 import io.legado.app.lib.theme.primaryColor
 import io.legado.app.lib.theme.primaryTextColor
+import io.legado.app.ui.config.GithubWishDialog
 import io.legado.app.ui.main.MainFragmentInterface
 import io.legado.app.ui.rss.article.RssSortActivity
 import io.legado.app.ui.rss.favorites.RssFavoritesActivity
@@ -32,11 +34,14 @@ import io.legado.app.utils.openUrl
 import io.legado.app.utils.setEdgeEffectColor
 import io.legado.app.utils.splitNotBlank
 import io.legado.app.utils.startActivity
+import io.legado.app.utils.showDialogFragment
 import io.legado.app.utils.viewbindingdelegate.viewBinding
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 
 /**
@@ -84,8 +89,24 @@ class RssFragment() : VMBaseFragment<RssViewModel>(R.layout.fragment_rss),
         when (item.itemId) {
             R.id.menu_rss_config -> startActivity<RssSourceActivity>()
             R.id.menu_rss_star -> startActivity<RssFavoritesActivity>()
+            R.id.menu_lede_changelog -> openLedeChangelog()
+            R.id.menu_github_wish -> showDialogFragment<GithubWishDialog>()
             else -> if (item.groupId == R.id.menu_group_text) {
                 searchView.setQuery("group:${item.title}", true)
+            }
+        }
+    }
+
+    /**
+     * lean（coolsnowwolf）LEDE 没有 CHANGELOG 文件，master 的提交历史就是它的更新日志；
+     * 订阅源缺失时先补一条，再打开这个订阅的文章列表
+     */
+    private fun openLedeChangelog() {
+        lifecycleScope.launch {
+            withContext(Dispatchers.IO) { DefaultData.ensureBuiltinRssSources() }
+            if (view == null) return@launch
+            startActivity<RssSortActivity> {
+                putExtra("url", DefaultData.LEDE_RSS_URL)
             }
         }
     }
