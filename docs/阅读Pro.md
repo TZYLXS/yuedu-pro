@@ -13,7 +13,7 @@ room 2.6.0 / okhttp 4.11.0 / compileSdk 34）在 JDK 17 上可稳定构建，且
 | `app/build.gradle` | `applicationId` → `io.legado.pro`（与官方版、API19 版共存） |
 | `app/build.gradle` | `minSdk 19 → 24`，`targetSdk 30 → 33` |
 | `app/build.gradle` | 新增 `-PtargetAbi=armv7/arm64` 开关，决定 `abiFilters` 与产物名后缀 |
-| `app/build.gradle` | `versionCode 19001 → 10900`（当前 1.9），输出名 `${appName}_${flavor}_${version}${abiSuffix}.apk` |
+| `app/build.gradle` | `versionCode 19001 → 11000`（当前 1.10），输出名 `${appName}_${flavor}_${version}${abiSuffix}.apk` |
 | `modules/book`、`modules/rhino1.7.3` | `minSdk 24`、`targetSdk 33`，与主模块一致 |
 | `res/values*/strings.xml` | `app_name` → 阅读Pro（含 zh / zh-HK / zh-TW 三个语言目录） |
 | `AndroidManifest.xml` | 删除 `<uses-sdk tools:overrideLibrary=...>`（三方库 minSdk 21 < 24，合并无需 override） |
@@ -59,8 +59,8 @@ Android 7.0 起系统按 v2 校验，v1 只是给仍做 JAR 校验的老安装�
 
 | APK | 体积 | ABI | 校验 |
 | --- | --- | --- | --- |
-| `yuedu_pro_app_1.9-armv7.apk` | 17.52 MB | armeabi-v7a | `sdkVersion 24` / `targetSdkVersion 33` / `io.legado.pro` / v2 签名 |
-| `yuedu_pro_app_1.9-arm64.apk` | 17.56 MB | arm64-v8a | 同上 |
+| `yuedu_pro_app_1.10-armv7.apk` | 17.52 MB | armeabi-v7a | `sdkVersion 24` / `targetSdkVersion 33` / `io.legado.pro` / v2 签名 |
+| `yuedu_pro_app_1.10-arm64.apk` | 17.56 MB | arm64-v8a | 同上 |
 
 原生库（每个 APK 只带自己那一套）：
 
@@ -74,6 +74,16 @@ DEX：6 个（`classes.dex` ~8.6MB、`classes2.dex` 仅 2.9KB、`classes3.dex` ~
 - **真机运行验证**：测试机 adb 掉线，未实测启动、搜索、阅读。接上 USB 后跑 `scripts/verify_device.bat`。
 - 应用内「检查更新」仍指向 Legado 官方仓库，换成本仓库的 Release 需要改 `AppUpdateService` 的地址。
 - 未做混淆/资源压缩（`minifyEnabled false`），体积偏大，后续可按需开启。
+
+## 1.10：跟进 `docs/更新日志.md` 1.11.3，无代码改动
+
+`docs/更新日志.md` 新增 **1.11.3（2026-11-10）**：服务端补 `applyReplaceRules`（正文净化）、`formatJs` 结果生效、脚本/测试目录名统一、日志写入 `docs`、README 版本自动同步——全是服务端 legado-py 侧修复。
+
+`docs/APP同步接口.md` 本轮**未变**（27 458 B / SHA256 `7b46d6a625031f31…`），第 4 / 9 / 11 / 13 / 14 / 15 / 16 / 17 章的字段表继续有效，`FnReaderRemote.kt` / `FnReaderBridgeService.kt` / `FnReaderConfigDialog.kt` 与 1.9 完全一致，本版只动版本号（1.10 / 11000）与文档。
+
+正文净化与 `formatJs` 在服务端就做完了，`/api/m/content` 返回的已经是净化后的正文；客户端不再叠一层，否则二次净化会把分段拆乱。
+
+实测（MuMu + FnReader 1.11.3）：首启日志首条 `2026/11/10（1.10）`，「测试连接」回显 1.11.3，书架 10 本 / 进度 10 条 / 书源 403 个。
 
 ## 1.9：跟进文档 §15，软总线支持 rank 代抓榜单
 
