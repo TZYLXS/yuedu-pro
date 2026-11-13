@@ -13,7 +13,7 @@ room 2.6.0 / okhttp 4.11.0 / compileSdk 34）在 JDK 17 上可稳定构建，且
 | `app/build.gradle` | `applicationId` → `io.legado.pro`（与官方版、API19 版共存） |
 | `app/build.gradle` | `minSdk 19 → 24`，`targetSdk 30 → 33` |
 | `app/build.gradle` | 新增 `-PtargetAbi=armv7/arm64` 开关，决定 `abiFilters` 与产物名后缀 |
-| `app/build.gradle` | `versionCode 19001 → 20300`（当前 2.0.3），输出名 `${appName}_${flavor}_${version}${abiSuffix}.apk` |
+| `app/build.gradle` | `versionCode 19001 → 20004`（当前 2.0.4），输出名 `${appName}_${flavor}_${version}${abiSuffix}.apk` |
 | `modules/book`、`modules/rhino1.7.3` | `minSdk 24`、`targetSdk 33`，与主模块一致 |
 | `res/values*/strings.xml` | `app_name` → 阅读Pro（含 zh / zh-HK / zh-TW 三个语言目录） |
 | `AndroidManifest.xml` | 删除 `<uses-sdk tools:overrideLibrary=...>`（三方库 minSdk 21 < 24，合并无需 override） |
@@ -74,6 +74,20 @@ DEX：6 个（`classes.dex` ~8.6MB、`classes2.dex` 仅 2.9KB、`classes3.dex` ~
 - **真机运行验证**：测试机 adb 掉线，未实测启动、搜索、阅读。接上 USB 后跑 `scripts/verify_device.bat`。
 - 应用内「检查更新」仍指向 Legado 官方仓库，换成本仓库的 Release 需要改 `AppUpdateService` 的地址。
 - 未做混淆/资源压缩（`minifyEnabled false`），体积偏大，后续可按需开启。
+
+## 2.0.4（versionCode 20004）：仅跟进文档，无代码改动
+
+服务端 `docs/更新日志.md` 再新增 2.0.5 / 2.0.6 两段（都在讲「加入书架后自动抓完整目录」），
+`docs/APP同步接口.md` 无变化（`68e3f7954681`，29343 B）。
+
+- **2.0.5**：加入书架后立即抓完整目录（强制 `refresh`、含分页），服务端后台补全并广播，按钮显示章数
+- **2.0.6**：加入书架立即抓完整目录，有手机在线优先走软总线（能过反爬），无设备或失败自动回落本机解析；
+  按钮与提示显示章数和来源
+
+客户端侧无需改动：`toc` 任务走 `WebBook.getChapterListAwait`，按 `nextTocUrl` / 页面「下一页」翻页
+（上限 40 页）整本抓完才回，没有缓存，天然等同服务端要求的 `refresh`；软总线 `toc` 收到即回
+`chapters` 全量，服务端拿去补全即可。超时照旧：`JOB_TIMEOUT_TOC = 18000L`（服务端等 20 s）、
+`JOB_TIMEOUT_CONTENT = 23000L`、`JOB_TIMEOUT_BOOKINFO = 9000L`。本版只动版本号与应用内日志。
 
 ## 2.0.3（versionCode 20300）：仅跟进文档，无代码改动
 
