@@ -1,4 +1,4 @@
-## 阅读Pro 2.4.2（versionCode 20402）
+## 阅读Pro 2.4.3（versionCode 20403）
 
 Legado（阅读）`3.23.110211` 编译，**minSdk 24 / targetSdk 33**（Android 7.0+），分 **armv7** 与 **arm64** 两个产物。
 应用名「阅读Pro」，包名 `io.legado.pro`，可与官方版、API19 版共存安装。
@@ -16,16 +16,16 @@ Legado（阅读）`3.23.110211` 编译，**minSdk 24 / targetSdk 33**（Android 
 | 上传 → 派发 → 手机解析 | mobi 上传后约 6 s 变 `complete`，`chapters=3`、`parts=2/2`，`/api/bus` 出现在线设备与 `ebook-parse ok:true` |
 | 按章回传 | `POST /api/remote/job` 造 `ebook-chapter`，客户端 0 s 回 `{"chapters":1,"indexes":[1]}`；`/api/content?index=1` 返回 2 段正文（`cached:true`、`via:ebook-json`） |
 | 删除接口 | `DELETE /api/ebook/delete?sha1=` 两条 `failed` 条目均 200，列表 count 6→5 |
-| 发版包冒烟 | MuMu 安装启动正常，`versionName 2.4.2` / `versionCode 20402`，更新日志首条即本版 |
+| 发版包冒烟 | MuMu 安装启动正常，`versionName 2.4.3` / `versionCode 20403`，更新日志首条即本版 |
 
 ### 产物
 
 | 文件 | 体积 | SHA256 |
 | --- | --- | --- |
-| `yuedu_pro_app_2.4.2-arm64.apk` | 18 767 403 B（17.90 MB） | `b605462ee0a58b47df41c21846a8d61796329b583c661364df95cf15892b775d` |
-| `yuedu_pro_app_2.4.2-armv7.apk` | 18 722 429 B（17.85 MB） | `120f2edc2b96d80fb0463e21f04f940a0115b3c8cd1d0fb50f4612e64af8a0b4` |
+| `yuedu_pro_app_2.4.3-arm64.apk` | 18 767 398 B（17.90 MB） | `115cc50b5c8dafb40e9b2afe8b12cf5f92ee00b89742fdfdd075d7ce074fae91` |
+| `yuedu_pro_app_2.4.3-armv7.apk` | 18 722 423 B（17.85 MB） | `260840a4c5cfd921657fee9071217d9af94da62bd5e4429a46bf3ea80ff4c540` |
 
-`aapt2 dump badging`：arm64 → `io.legado.pro`、`versionCode 20402`、`versionName 2.4.2`、`sdkVersion 24`、`targetSdkVersion 33`、`native-code 'arm64-v8a'`；armv7 同上但 `native-code 'armeabi-v7a'`；两个包的 `application-debuggable` 均不存在（发版包无 debug 能力）。
+`aapt2 dump badging`：arm64 → `io.legado.pro`、`versionCode 20403`、`versionName 2.4.3`、`sdkVersion 24`、`targetSdkVersion 33`、`native-code 'arm64-v8a'`；armv7 同上但 `native-code 'armeabi-v7a'`；两个包的 `application-debuggable` 均不存在（发版包无 debug 能力）。
 
 ### 安装
 
