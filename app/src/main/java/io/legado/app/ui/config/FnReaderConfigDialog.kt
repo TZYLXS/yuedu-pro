@@ -4,12 +4,14 @@ import android.content.Intent
 import android.graphics.Typeface
 import android.net.Uri
 import android.os.Bundle
+import android.provider.OpenableColumns
 import android.util.Base64
 import android.util.TypedValue
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.activity.result.contract.ActivityResultContracts
 import io.legado.app.R
 import io.legado.app.base.BaseDialogFragment
 import io.legado.app.data.appDb
@@ -86,6 +88,17 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
         /** 每轮同步最多现场下载几张在线封面（防几十本书把同步拖成几分钟） */
         private const val MAX_COVER_FETCH = 20
 
+        /** 传书选文件的 MIME：老设备文件管理器常把 mobi 报成 octet-stream，最后用通配兜底 */
+        private val UPLOAD_MIMES = arrayOf(
+            "application/pdf",
+            "application/epub+zip",
+            "application/x-mobipocket-ebook",
+            "application/vnd.amazon.ebook",
+            "text/plain",
+            "application/octet-stream",
+            "*/*"
+        )
+
         /** 下载封面用的 UA：部分源站会拦空 UA / 无 Referer 的请求 */
         private const val COVER_UA =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +
@@ -108,6 +121,12 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
 
     /** 探测成功后记住可用的地址，后续各菜单直接复用，避免每次再试一遍 */
     private var resolvedBase: String? = null
+
+    /** 传书选文件：只读一次，不申请持久化权限 */
+    private val pickEbookFile =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) startUploadEbook(uri)
+        }
 
     override fun onStart() {
         super.onStart()
@@ -190,6 +209,12 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
             "GET /api/bus：列出已报到的手机、在线状态、累计代理解析次数；"
                     + "要暂停某一台，在飞牛网页「设置 → 软总线」里点一下就行"
         ) { showBus() }
+        addMethod(
+            "⑧ 传书到飞牛（本机电子书直接推上去）",
+            "选本机一个 pdf / mobi / azw3 / epub / txt 直接推给飞牛（POST /api/m/ebook/upload，裸 body），"
+                    + "不用挂 WebDAV；上传令牌每次现取（GET /api/ebook/upload），"
+                    + "服务端重置过传书令牌也不用改这里，传完飞牛自动入库并派给本机解析"
+        ) { pickEbookFile.launch(UPLOAD_MIMES) }
         // ⑧ 上传缓存、⑨ 书源同步已改为自动：连上服务端后每 5 分钟由 FnReaderBridgeService 跑一次，
         // 服务端没这两个接口就自动跳过，这里不再放手动按钮。
     }
@@ -770,6 +795,73 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
             binding.tvStatus.text = "上传缓存失败：$msg"
             toastOnUi("上传缓存失败：$msg")
         }
+    }
+
+    /**
+     * ⑧ 传书：把本机一个电子书文件直接推给飞牛（文档 §17）。
+     * 上传令牌由 FnReaderRemote 每次现取，面板里不放这个字段——服务端重置过也不影响。
+     */
+    private fun startUploadEbook(uri: Uri) {
+        val base = requireServerAndToken() ?: return
+        val tk = token()
+        val ctx = requireContext()
+        val name = ebookName(uri)
+        val size = ebookSize(uri)
+        binding.tvStatus.text = "传书中…$name"
+        execute {
+            val r = FnReaderRemote.uploadEbook(base, tk, name, size) {
+                ctx.contentResolver.openInputStream(uri)
+                    ?: throw FnReaderRemote.RemoteException("读不到这个文件：$name")
+            }
+            val status = r.optString("status")
+            val sha = r.optString("sha1")
+            buildString {
+                append("已传：").append(r.optString("name", name))
+                val bytes = r.optLong("size", size)
+                if (bytes > 0) {
+                    append("（")
+                        .append(String.format(Locale.US, "%.1f", bytes / 1024.0 / 1024.0))
+                        .append(" MB）")
+                }
+                append("\n")
+                if (status == "complete") {
+                    append("飞牛已入库并解析完成，网页书架里可以直接读")
+                } else {
+                    append("飞牛已入库（").append(status.ifEmpty { "queued" }).append("）")
+                    append("，本机「手机解析待命」开着就由手机解析，解析完网页书架就能读")
+                }
+                if (sha.isNotEmpty()) append("\nsha1 ").append(sha)
+            }
+        }.onSuccess { summary ->
+            binding.tvStatus.text = summary
+            toastOnUi(summary.lineSequence().first())
+        }.onError {
+            val msg = FnReaderRemote.describeError(it)
+            binding.tvStatus.text = "传书失败：$msg"
+            toastOnUi("传书失败：$msg")
+        }
+    }
+
+    /** 文件选择器给的文件名，取不到就用 URI 末段 */
+    private fun ebookName(uri: Uri): String {
+        var name: String? = null
+        runCatching {
+            requireContext().contentResolver
+                .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+                ?.use { c -> if (c.moveToFirst() && !c.isNull(0)) name = c.getString(0) }
+        }
+        return name ?: uri.lastPathSegment?.substringAfterLast('/') ?: "ebook"
+    }
+
+    /** 文件大小，取不到返回 0（服务端按 chunked 收） */
+    private fun ebookSize(uri: Uri): Long {
+        var size = 0L
+        runCatching {
+            requireContext().contentResolver
+                .query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)
+                ?.use { c -> if (c.moveToFirst() && !c.isNull(0)) size = c.getLong(0) }
+        }
+        return size
     }
 
     /** 一本书的 /api/m/cache 载荷：章节原文 + 图片 + 封面（字段见文档 §16.1） */

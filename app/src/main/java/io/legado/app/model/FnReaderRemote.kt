@@ -14,8 +14,10 @@ import org.jsoup.Jsoup
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 
 /**
  * FnReader 手机端解析桥（服务端 v1.7.26 起，1.8.x 增加软总线）
@@ -236,6 +238,112 @@ object FnReaderRemote {
         } finally {
             conn?.disconnect()
         }
+    }
+
+    // ---------------- 传书（本机电子书推给飞牛，2.4.0 起） ----------------
+
+    /** 传书支持的扩展名（与服务端 UPLOAD_FORMATS 一致，prc/azw 按 mobi 处理） */
+    private val UPLOAD_EXTS = setOf("pdf", "mobi", "prc", "azw", "azw3", "epub", "txt")
+
+    /**
+     * 传书配置：`GET /api/ebook/upload`（走 X-Api-Token）→ `{enabled, token, dir, maxMB, formats, endpoint}`
+     *
+     * 上传令牌和读写令牌是两把：`uploadToken` 会被 `POST /api/ebook/upload/reset-token` 换掉，
+     * 服务端重建 config 时也会重新随机生成，所以**每次现取**，不缓存、不写死。
+     */
+    suspend fun fetchUploadInfo(base: String, token: String): JSONObject = withContext(Dispatchers.IO) {
+        val (code, body) = request("GET", "$base/api/ebook/upload", token, null, 20000)
+        if (code !in 200..299) throw RemoteException(explain(code, body))
+        runCatching { JSONObject(body.ifEmpty { "{}" }) }.getOrDefault(JSONObject())
+    }
+
+    /**
+     * 传书：`POST /api/m/ebook/upload?name=<文件名>`，body 必须是裸二进制（服务端拒绝 multipart）。
+     *
+     * 上传令牌现取；遇上 `401 code:"upload-token"` 说明令牌刚被重置，重取一遍再试一次。
+     *
+     * @param open 每次调用都要能返回一个新的流（重试时会再要一次）
+     * @param size 文件字节数，<= 0 时改用 chunked 上传
+     */
+    suspend fun uploadEbook(
+        base: String,
+        apiToken: String,
+        fileName: String,
+        size: Long,
+        open: () -> InputStream
+    ): JSONObject = withContext(Dispatchers.IO) {
+        val info = fetchUploadInfo(base, apiToken)
+        if (!info.optBoolean("enabled", true)) {
+            throw RemoteException("服务端已关闭客户端传书（设置 → 手机接入 → 传书）")
+        }
+        val ext = fileName.substringAfterLast('.', "").lowercase()
+        if (ext !in UPLOAD_EXTS) {
+            throw RemoteException("只支持 pdf / mobi / azw3 / epub / txt，这个文件是 .$ext")
+        }
+        val maxMB = info.optInt("maxMB", 1024)
+        if (maxMB > 0 && size > maxMB.toLong() * 1024 * 1024) {
+            throw RemoteException("文件 ${size / 1024 / 1024} MB，超过服务端上限 $maxMB MB")
+        }
+        var token = info.optString("token")
+        if (token.isEmpty()) {
+            throw RemoteException("服务端没返回上传令牌：去「设置 → 手机接入 → 传书令牌」重置一次")
+        }
+        repeat(2) { attempt ->
+            val (code, body) = postEbookFile(base, token, fileName, size, open)
+            if (code in 200..299) {
+                return@withContext runCatching { JSONObject(body) }.getOrDefault(JSONObject())
+            }
+            val tag = runCatching { JSONObject(body).optString("code") }.getOrDefault("")
+            if (attempt == 0 && code == 401 && tag == "upload-token") {
+                // 令牌刚被换掉：重取一次再试，别让用户以为接口坏了
+                token = fetchUploadInfo(base, apiToken).optString("token")
+                if (token.isEmpty()) throw RemoteException(uploadError(code, body))
+            } else {
+                throw RemoteException(uploadError(code, body))
+            }
+        }
+        throw RemoteException("传书失败：令牌取到就被重置了，再点一次即可")
+    }
+
+    /** 裸 body 上传一次，返回 (状态码, 响应文本) */
+    private fun postEbookFile(
+        base: String,
+        uploadToken: String,
+        fileName: String,
+        size: Long,
+        open: () -> InputStream
+    ): Pair<Int, String> {
+        val url = "$base/api/m/ebook/upload?name=${URLEncoder.encode(fileName, "UTF-8")}"
+        var conn: HttpURLConnection? = null
+        try {
+            conn = URL(url).openConnection() as HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.connectTimeout = 10000
+            conn.readTimeout = 120000
+            conn.doOutput = true
+            conn.setRequestProperty("X-Upload-Token", uploadToken)
+            conn.setRequestProperty("Content-Type", "application/octet-stream")
+            if (size > 0) {
+                conn.setFixedLengthStreamingMode(size)
+            } else {
+                conn.setChunkedStreamingMode(64 * 1024)
+            }
+            open().use { input ->
+                conn.outputStream.use { out -> input.copyTo(out, 64 * 1024) }
+            }
+            val code = conn.responseCode
+            val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
+                ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+            return code to body
+        } finally {
+            conn?.disconnect()
+        }
+    }
+
+    /** 传书失败提示：优先用服务端给的 error，再兜底通用文案 */
+    private fun uploadError(code: Int, body: String): String {
+        val err = runCatching { JSONObject(body).optString("error") }.getOrDefault("")
+        return err.ifEmpty { explain(code, body) }
     }
 
     /**
