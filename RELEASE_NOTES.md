@@ -2,7 +2,7 @@
 
 Legado（阅读）`3.23.110211` 编译，**minSdk 24 / targetSdk 33**（Android 7.0+），分 **armv7** 与 **arm64** 两个产物。
 应用名「阅读Pro」，包名 `io.legado.pro`，可与官方版、API19 版共存安装。
-与 **安卓 4.0 版（`io.legado.api19`）2.4.2** 同步发布、同一套版本号，并与服务端 `legado-web` **v2.4.2** 对齐。
+与 **安卓 4.0 版（`io.legado.api19`）2.4.3** 同步发布、同一套版本号，并与服务端 `legado-web` **v2.4.3** 对齐。
 
 ### 本版新增
 
