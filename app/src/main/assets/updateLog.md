@@ -12,6 +12,27 @@
 * 正文出现缺字漏字、内容缺失、排版错乱等情况，有可能是净化规则或简繁转换出现问题。
 * 漫画源看书显示乱码，**阅读与其他软件的源并不通用**，请导入阅读的支持的漫画源！
 
+**2026/11/15（2.4.2）**
+
+* 新增目录先行：解析电子书时只回传目录，正文按章按需补齐
+* 新增按章回传：飞牛请求某章时，手机用本地原文件取出该章回传，配合服务端 v2.4.2 的按需补章
+
+**2026/11/14（2.0.6）**
+
+* 新增软总线 `ebook-parse` 任务：飞牛扫到 EPUB/MOBI 时把整本文件发给手机，手机解析成 `fnreader.ebook.v1` JSON 分片回传，服务端只按 JSON 渲染；PDF/TXT 仍由服务端本机解析
+* 新增 `FnReaderEbook`：EPUB（container/OPF/spine/nav+NCX）与 MOBI6（PalmDOC 压缩 1/2、EXTH、h1~h3 切章）本地解析，段落类型 p / h1~h6 / quote / hr / img，与草稿 `docs/软总线电子书解析设计.md` §5 一致；KF8/AZW3 明确返回 `kf8-unsupported`
+* 解析队列独立：电子书任务不占 search/toc/content 的 2 个并发；下载支持 Range 续传，分片按 50 章 / 2MB 切分，单片远低于服务端 8MB 上限
+* 失败语义：drm / corrupt / unsupported / kf8-unsupported 原样回传，服务端不再本地重试；网络或超时失败由服务端自动兜底本机解析
+
+**2026/11/14（2.0.5）**
+
+* 本版仅跟进文档，无代码改动：服务端 `docs/更新日志.md` 新增 2.0.7 / 2.0.8 / 2.0.9 三段，`docs/APP同步接口.md` 未变（`68e3f7954681`，29343 B）
+* 2.0.7：`<下载目录>/cache` 下同一本书不再生成「书名 (2)(3)…」，重复同步复用原目录；启动时自动合并历史重复目录，新增 `/api/cache/dedupe`
+* 2.0.8：去重逻辑改为异步、只由 `/api/cache/dedupe` 触发，避免扫描大量目录卡住服务；重复同步复用原目录
+* 2.0.9：按「书名+作者」归并跨书源同名目录，合并改用 rename（同盘瞬时）；已把 NAS 上 1641 个重复目录清到 158 个
+* 客户端无需改动：这三段全是服务端缓存落盘与目录去重，`/api/cache/dedupe` 由服务端自己调；`shelf` / `search` / `toc` / `content` / `progress` / `sources/sync` / `cover` / 封面与书源上传的路径、字段、鉴权、超时都没变
+* 超时照旧：`JOB_TIMEOUT_SEARCH/TOC = 18000L`、`JOB_TIMEOUT_CONTENT = 23000L`、`JOB_TIMEOUT_BOOKINFO = 9000L`；软总线任务类型仍为 search / toc / content / rank / bookinfo
+
 **2026/11/14（2.0.4）**
 
 * 本版仅跟进文档，无代码改动：服务端 `docs/更新日志.md` 新增 2.0.5 / 2.0.6 两段，`docs/APP同步接口.md` 未变（`68e3f7954681`，29343 B）

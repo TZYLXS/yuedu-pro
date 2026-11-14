@@ -13,7 +13,7 @@ room 2.6.0 / okhttp 4.11.0 / compileSdk 34）在 JDK 17 上可稳定构建，且
 | `app/build.gradle` | `applicationId` → `io.legado.pro`（与官方版、API19 版共存） |
 | `app/build.gradle` | `minSdk 19 → 24`，`targetSdk 30 → 33` |
 | `app/build.gradle` | 新增 `-PtargetAbi=armv7/arm64` 开关，决定 `abiFilters` 与产物名后缀 |
-| `app/build.gradle` | `versionCode 19001 → 20004`（当前 2.0.4），输出名 `${appName}_${flavor}_${version}${abiSuffix}.apk` |
+| `app/build.gradle` | `versionCode 19001 → 20005`（当前 2.0.5），输出名 `${appName}_${flavor}_${version}${abiSuffix}.apk` |
 | `modules/book`、`modules/rhino1.7.3` | `minSdk 24`、`targetSdk 33`，与主模块一致 |
 | `res/values*/strings.xml` | `app_name` → 阅读Pro（含 zh / zh-HK / zh-TW 三个语言目录） |
 | `AndroidManifest.xml` | 删除 `<uses-sdk tools:overrideLibrary=...>`（三方库 minSdk 21 < 24，合并无需 override） |
@@ -75,6 +75,19 @@ DEX：6 个（`classes.dex` ~8.6MB、`classes2.dex` 仅 2.9KB、`classes3.dex` ~
 - 应用内「检查更新」仍指向 Legado 官方仓库，换成本仓库的 Release 需要改 `AppUpdateService` 的地址。
 - 未做混淆/资源压缩（`minifyEnabled false`），体积偏大，后续可按需开启。
 
+## 2.0.5（versionCode 20005）：仅跟进文档，无代码改动
+
+服务端 `docs/更新日志.md` 再新增 2.0.7 / 2.0.8 / 2.0.9 三段（都讲缓存目录去重），
+`docs/APP同步接口.md` 无变化（`68e3f7954681`，29343 B）。
+
+- **2.0.7**：`<下载目录>/cache` 下同一本书不再生成「书名 (2)(3)…」，重复同步复用原目录；启动时自动合并历史重复目录，新增 `/api/cache/dedupe`
+- **2.0.8**：去重改为异步、只由 `/api/cache/dedupe` 触发，避免扫描大量目录卡住服务；重复同步复用原目录
+- **2.0.9**：按「书名+作者」归并跨书源同名目录，合并改用 rename（同盘瞬时）；NAS 上 1641 个重复目录已清到 158 个
+
+这三段全在服务端缓存落盘与目录去重，`/api/cache/dedupe` 由服务端自己调用，客户端不参与；
+`shelf` / `search` / `toc` / `content` / `progress` / `sources/sync` / `cover` 与封面、书源上传的路径、
+字段、鉴权、超时都没变，本版只动版本号、客户端 md 与应用内日志。
+
 ## 2.0.4（versionCode 20004）：仅跟进文档，无代码改动
 
 服务端 `docs/更新日志.md` 再新增 2.0.5 / 2.0.6 两段（都在讲「加入书架后自动抓完整目录」），
@@ -89,7 +102,7 @@ DEX：6 个（`classes.dex` ~8.6MB、`classes2.dex` 仅 2.9KB、`classes3.dex` ~
 `chapters` 全量，服务端拿去补全即可。超时照旧：`JOB_TIMEOUT_TOC = 18000L`（服务端等 20 s）、
 `JOB_TIMEOUT_CONTENT = 23000L`、`JOB_TIMEOUT_BOOKINFO = 9000L`。本版只动版本号与应用内日志。
 
-## 2.0.3（versionCode 20300）：仅跟进文档，无代码改动
+## 2.0.3（versionCode 20003）：仅跟进文档，无代码改动
 
 服务端 `docs/更新日志.md` 新增 2.0.3 / 2.0.4（目录引擎分页上限 5 → 40 页、带循环检测、
 没写 `nextTocUrl` 时按页面「下一页」兜底；Python 引擎目录同样分页），`docs/APP同步接口.md` 无变化。
