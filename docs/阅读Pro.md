@@ -13,7 +13,7 @@ room 2.6.0 / okhttp 4.11.0 / compileSdk 34）在 JDK 17 上可稳定构建，且
 | `app/build.gradle` | `applicationId` → `io.legado.pro`（与官方版、API19 版共存） |
 | `app/build.gradle` | `minSdk 19 → 24`，`targetSdk 30 → 33` |
 | `app/build.gradle` | 新增 `-PtargetAbi=armv7/arm64` 开关，决定 `abiFilters` 与产物名后缀 |
-| `app/build.gradle` | `versionCode 19001 → 20005`（当前 2.0.5），输出名 `${appName}_${flavor}_${version}${abiSuffix}.apk` |
+| `app/build.gradle` | `versionCode 19001 → 2060701`（当前 2.6.7.1），输出名 `${appName}_${flavor}_${version}${abiSuffix}.apk` |
 | `modules/book`、`modules/rhino1.7.3` | `minSdk 24`、`targetSdk 33`，与主模块一致 |
 | `res/values*/strings.xml` | `app_name` → 阅读Pro（含 zh / zh-HK / zh-TW 三个语言目录） |
 | `AndroidManifest.xml` | 删除 `<uses-sdk tools:overrideLibrary=...>`（三方库 minSdk 21 < 24，合并无需 override） |
@@ -74,6 +74,22 @@ DEX：6 个（`classes.dex` ~8.6MB、`classes2.dex` 仅 2.9KB、`classes3.dex` ~
 - **真机运行验证**：测试机 adb 掉线，未实测启动、搜索、阅读。接上 USB 后跑 `scripts/verify_device.bat`。
 - 应用内「检查更新」仍指向 Legado 官方仓库，换成本仓库的 Release 需要改 `AppUpdateService` 的地址。
 - 未做混淆/资源压缩（`minifyEnabled false`），体积偏大，后续可按需开启。
+
+## 2.6.7.1（versionCode 2060701）：仅跟进文档，无代码改动
+
+版本号按「服务端版号 + 0.0.0.1」对齐，一次覆盖服务端 2.0.6 – 2.6.7 的全部改动。本版只改包元数据与文档，
+Java 代码与 2.4.4.1 完全一致。
+
+- **2.6.6 / 2.6.7（本次跟进）**：`docs/APP同步接口.md` 零改动（33802 B / `e04f3466…`）；`docs/更新日志.txt`
+  新增这两段（`docs/更新日志.md` 自 2.6.0 起服务端只写 `.txt`，巡检两处都比对）
+  - 2.6.6：净化规则（替换·屏蔽）对 `/api/m/content` 同样生效，App 正文与网页一致；`title` / `paragraphs` 结构不变
+  - 2.6.7：网页端新增「离线缓存」页、`GET /api/ebook/export`（整本 TXT 导出）、`GET /api/update/check`
+    （启动检查 GitHub 最新 Release）；App 侧无对应界面，也不需要
+- **2.4.4.1（上一版）**：面板 ⑧ 传书到飞牛，pdf / mobi / azw3 / epub / txt 直传，令牌每次现取
+- **2.4.3**：目录先行 + 按章回传
+- **2.0.6**：`ebook-parse` 软总线任务，EPUB / MOBI 交手机解析并回传 `fnreader.ebook.v1` JSON
+- 契约复核：软总线任务类型仍为 `search` / `toc` / `content` / `rank` / `bookinfo`，超时 18 / 18 / 23 / 23 / 9 秒；
+  `X-Api-Token` 与传书 `X-Upload-Token`（现取）鉴权未变；上行回传字段未变
 
 ## 2.0.5（versionCode 20005）：仅跟进文档，无代码改动
 

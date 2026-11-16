@@ -316,3 +316,30 @@ POST /api/m/sources/sync                   X-Api-Token: …
 - [x] 两仓 `FnReaderBridgeService.kt` 同构（双队列 + `JOB_TIMEOUT_BOOKINFO=9000L`），SHA256 一致
 - [x] 首启更新日志首条为本版（`2026/11/10（2.0.2）`），老段落保留
 - [x] 面板 ①–⑤ 与自动同步一致，无 ⑧⑨ 残留按钮
+## 14 2.0.6 – 2.6.7（2026-11-14 ~ 11-16）：接口契约未变，回传不用改
+
+这一段时间服务端连发了 2.0.6 / 2.4.3 / 2.4.4 / 2.6.0 – 2.6.7，逐条核对后**没有一条改到 APP 回传协议**：
+
+| 版本 | 服务端改了什么 | 对客户端的影响 |
+| --- | --- | --- |
+| 2.0.6 | 新增 `ebook-parse` 软总线任务，EPUB / MOBI 整本交手机解析，回传 `fnreader.ebook.v1` JSON 分片 | 客户端 2.0.6 已实现，payload 字段 `sha1` / `format` / `name` / `size` / `fileUrl` / `token` 未变 |
+| 2.4.3 | 目录先行：解析完只回目录，正文按章按需补齐 | 客户端 2.4.3 已实现，`tocOnly` / `mode:toc` 仍是分支判定 |
+| 2.4.4 | 新增传书：`GET /api/ebook/upload` 取令牌、`POST /api/m/ebook/upload?name=` 传裸 body | 客户端 2.4.4.1 已实现，令牌每次现取 + 401 `upload-token` 重取一次 |
+| 2.6.3 | `phoneSearch` 超时 8 s → 20 s，`search` 只传 `source`（书源 URL 字符串） | 客户端本来就用 `payload.optString("source")` 当 URL，一致 |
+| 2.6.4 | 删掉 `/api/m/remote/task` 与 `/api/m/remote/pending` 的确认闸门 | 客户端只轮询 `pending` 并回 `result`，闸门在服务端，去掉后到手任务更多，不用改 |
+| 2.6.5 | Node / Python 引擎统一桌面 UA（Chrome/157 + Edg/157） | 纯服务端请求头，客户端不参与 |
+| 2.6.6 | 「替换·屏蔽」净化规则开始作用于 `/api/m/content` | 返回体 `title` / `paragraphs` 字段与结构不变，只是内容已被净化 |
+| 2.6.7 | 新增 `/api/offline`、`GET /api/ebook/export`、`GET /api/update/check` | 三个入口都只在网页端用，APP 无对应界面 |
+
+结论（2026-11-16 核对）：软总线任务类型仍是 `search` / `toc` / `content` / `rank` / `bookinfo`，
+超时 `JOB_TIMEOUT_SEARCH/TOC = 18000 ms`、`CONTENT = 23000 ms`、`RANK = 23000 ms`、`BOOKINFO = 9000 ms`；
+鉴权仍是 `X-Api-Token`（回传）与 `X-Upload-Token`（传书，现取）；
+`/api/m/books`、`/api/m/progress/batch`、`/api/m/cover`、`/api/m/sources`、`/api/m/sources/sync`、
+`/api/m/cache`、`/api/m/remote/pending|result` 的路径、参数、回传字段全部未变。客户端 2.6.7.1 代码一行未改。
+
+自测清单（2.6.7.1 已逐条核对）：
+
+- [x] 两仓 `FnReaderRemote.kt` / `FnReaderBridgeService.kt` 代码与 2.4.4.1 完全一致，SHA256 未变
+- [x] 面板 ①–⑧ 与本文档 §5 / §8 / §9 / §13 / §14 一致，无 ⑧⑨ 旧自动按钮残留
+- [x] 首启更新日志首条为 `2026/11/16（2.6.7.1）`，老段落保留
+- [x] `toc` / `content` 任务字段表与 `/api/m/content` 实际响应（2.6.6 净化后）逐字段比对通过
