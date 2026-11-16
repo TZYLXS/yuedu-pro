@@ -331,16 +331,17 @@ POST /api/m/sources/sync                   X-Api-Token: …
 | 2.6.6 | 「替换·屏蔽」净化规则开始作用于 `/api/m/content` | 返回体 `title` / `paragraphs` 字段与结构不变，只是内容已被净化 |
 | 2.6.7 | 新增 `/api/offline`、`GET /api/ebook/export`、`GET /api/update/check` | 三个入口都只在网页端用，APP 无对应界面 |
 | 2.6.8 | 监听改 `::` 双栈、`/api/m/info` 新增 `ipv6Lans`（公网 IPv6 展示） | 客户端只取 `info` 的版本号，新增字段忽略；IPv4 连接不受影响 |
+| 2.6.9 / 2.6.10 | 网页设置页 IPv4 / IPv6 分行、IPv6 独立复制按钮，`ipv6Lans` 过滤 `::1` 回环 | 纯网页 UI 改动，`server.js` 与 `/api/m/*` 未动，客户端无需改动 |
 
-结论（2026-11-16 核对）：软总线任务类型仍是 `search` / `toc` / `content` / `rank` / `bookinfo`，
+结论（2026-11-17 核对）：软总线任务类型仍是 `search` / `toc` / `content` / `rank` / `bookinfo`，
 超时 `JOB_TIMEOUT_SEARCH/TOC = 18000 ms`、`CONTENT = 23000 ms`、`RANK = 23000 ms`、`BOOKINFO = 9000 ms`；
 鉴权仍是 `X-Api-Token`（回传）与 `X-Upload-Token`（传书，现取）；
 `/api/m/books`、`/api/m/progress/batch`、`/api/m/cover`、`/api/m/sources`、`/api/m/sources/sync`、
-`/api/m/cache`、`/api/m/remote/pending|result` 的路径、参数、回传字段全部未变。客户端 2.6.8.1 代码一行未改（与 2.6.7.1 逐字一致）。
+`/api/m/cache`、`/api/m/remote/pending|result` 的路径、参数、回传字段全部未变。客户端 2.6.10.1 代码一行未改（与 2.6.8.1、2.6.7.1 逐字一致）。
 
-自测清单（2.6.8.1 已逐条核对）：
+自测清单（2.6.10.1 已逐条核对）：
 
 - [x] 两仓 `FnReaderRemote.kt` / `FnReaderBridgeService.kt` 代码与 2.4.4.1 完全一致，SHA256 未变
 - [x] 面板 ①–⑧ 与本文档 §5 / §8 / §9 / §13 / §14 一致，无 ⑧⑨ 旧自动按钮残留
-- [x] 首启更新日志首条为 `2026/11/16（2.6.8.1）`，老段落保留
+- [x] 首启更新日志首条为 `2026/11/17（2.6.10.1）`，老段落保留
 - [x] `toc` / `content` 任务字段表与 `/api/m/content` 实际响应（2.6.6 净化后）逐字段比对通过
