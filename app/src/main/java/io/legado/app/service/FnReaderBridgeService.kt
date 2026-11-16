@@ -19,6 +19,7 @@ import io.legado.app.utils.putPrefString
 import io.legado.app.utils.servicePendingIntent
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -26,6 +27,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import splitties.init.appCtx
+import java.util.concurrent.Executors
 
 /**
  * FnReader 手机解析桥常驻服务
@@ -58,8 +60,23 @@ class FnReaderBridgeService : BaseService() {
         /** 按需补章：只解析不下载时几秒就出，留 60 秒给大书 + 网络 */
         private const val EBOOK_CHAPTER_TIMEOUT = 60 * 1000L
 
-        /** 检索/目录/正文队列并发数：太大会把站点打到限流，太小又会被慢源拖住 */
-        private const val SEARCH_CONCURRENCY = 2
+        /**
+         * 检索并发：Pro 面向 8 核 / 2 大核（A72 及以上）的高性能机型，按 CPU 核数自适应。
+         * 8 核及以上开 6 条解析线程，6 核 4 条，4 核 3 条，再低退回 2 条——
+         * 既要吃满性能，也不能把站点打到限流。
+         */
+        private val cpuCores: Int by lazy { Runtime.getRuntime().availableProcessors() }
+        private val searchConcurrency: Int by lazy {
+            when {
+                cpuCores >= 8 -> 6
+                cpuCores >= 6 -> 4
+                cpuCores >= 4 -> 3
+                else -> 2
+            }
+        }
+
+        /** 封面 / 简介专用线程数：单独一条池，永远不跟检索任务抢线程 */
+        private val infoConcurrency: Int by lazy { if (cpuCores >= 8) 2 else 1 }
 
         /** 书源同步 / 缓存上传的自动节拍：5 分钟一轮，连上就跑 */
         private const val AUTO_SYNC_INTERVAL = 5 * 60 * 1000L
@@ -121,6 +138,23 @@ class FnReaderBridgeService : BaseService() {
 
     /** 电子书解析单独一条队列：解析整本书很吃 CPU，不能挤掉搜索/正文任务 */
     private val ebookQueue = Channel<QueuedJob>(Channel.UNLIMITED)
+
+    /**
+     * 三条真正的线程池（不是协程默认调度器）：
+     * - parse：检索/目录/正文/榜单并行解析，线程数按核数自适应；
+     * - info：封面与简介独占，检索再忙也不会把补简介排到最后；
+     * - ebook：整本解析独占一个线程，避免和其他解析抢 CPU。
+     */
+    private val parseDispatcher = Executors.newFixedThreadPool(
+        searchConcurrency
+    ) { r -> Thread(r, "fnreader-parse").apply { isDaemon = true } }.asCoroutineDispatcher()
+    private val infoDispatcher = Executors.newFixedThreadPool(
+        infoConcurrency
+    ) { r -> Thread(r, "fnreader-info").apply { isDaemon = true } }.asCoroutineDispatcher()
+    private val ebookDispatcher = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "fnreader-ebook").apply { isDaemon = true }
+    }.asCoroutineDispatcher()
+
     private var notificationContent = "手机解析待命：等待飞牛派任务"
     private val notificationBuilder by lazy {
         NotificationCompat.Builder(this, AppConst.channelIdDownload)
@@ -158,6 +192,9 @@ class FnReaderBridgeService : BaseService() {
         isRun = false
         loopJob?.cancel()
         loopJob = null
+        runCatching { parseDispatcher.close() }
+        runCatching { infoDispatcher.close() }
+        runCatching { ebookDispatcher.close() }
         super.onDestroy()
     }
 
@@ -170,20 +207,20 @@ class FnReaderBridgeService : BaseService() {
             var lastAutoSyncAt = 0L
             // 服务端把本机判成调试设备时只提示一次，别每秒刷通知
             var debugWarned = false
-            // 两条队列各自的常驻工作者：检索 2 并发，简介单并发
-            repeat(SEARCH_CONCURRENCY) {
-                launch {
+            // 三条常驻工作者：检索按核数开 N 条真线程并行，简介/封面独占自己的线程，电子书独占一条
+            repeat(searchConcurrency) {
+                launch(parseDispatcher) {
                     for (item in searchQueue) {
                         runJob(item.base, item.token, item.job, item.onlineText)
                     }
                 }
             }
-            launch {
+            launch(infoDispatcher) {
                 for (item in infoQueue) {
                     runJob(item.base, item.token, item.job, item.onlineText)
                 }
             }
-            launch {
+            launch(ebookDispatcher) {
                 for (item in ebookQueue) {
                     if (item.job.type == "ebook-chapter") {
                         runEbookChapterJob(item)

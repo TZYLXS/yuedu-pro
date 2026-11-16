@@ -1,42 +1,59 @@
-## 阅读Pro 2.6.12.1（versionCode 2061201）
+## 阅读Pro 2.6.13.1（versionCode 2061301）
 
 Legado（阅读）`3.23.110211` 编译，**minSdk 24 / targetSdk 33**（Android 7.0+），分 **arm64-v8a** 与 **armeabi-v7a** 两个产物。
 应用名「阅读Pro」，包名 `io.legado.pro`，可与官方版、安卓 4.0 版共存安装。
-与 **安卓 4.0 版（`io.legado.api19`）2.6.12.1** 同步发布、同一套版本号；版号基线取自服务端 `legado-web` **v2.6.12**，本版为其上的 `0.0.0.1` 小更新。
+与 **安卓 4.0 版（`io.legado.api19`）2.6.13.1** 同步发布、同一套版本号；版号基线取自服务端 `legado-web` **v2.6.13**，本版为其上的 `0.0.0.1` 小更新。
 
-### 本版变更（首次不是「仅跟进文档」）
+### 一、跟进服务端 2.6.13（调试设备识别扩展）
 
-服务端 2.6.12（`b85fb31`，2026-11-17 02:41）在软总线加了「调试设备」判定：设备 ID 含 `bus-debug` / `debug`、或名称含「调试」即判为调试设备，
-其回传**一律丢弃**（`[softbus] 忽略调试设备回传`），任务留给真机或超时；调试任务（`payload.debug === true`）只投给调试设备，普通手机不再收到。
-接口侧两处新增：`GET /api/m/remote/pending` 响应多 `debug` 字段，`POST /api/m/remote/result` 对调试设备返回 `{ok:true, accepted:false, ignored:true, reason}`。
+服务端 2.6.13（`737cd6e`，2026-11-17 04:22）把 2.6.12 的调试设备判定放宽：
 
-客户端据此改了 2 个文件（A4 端逐条对齐）：
+```js
+/(bus[-_]?debug|busmon|\bmonitor\b|\bmock\b|\bfake\b|\be2e\b|\bdebug\b)/i.test(text) ||
+  /(调试|监控|测试机)/.test(text);
+```
 
-- `FnReaderRemote.poll()`：返回类型 `List<Job>` → `Pending(jobs, debug)`，先按对象取 `jobs` 再读 `debug`（缺省 false，兼容 2.6.11 及更早服务端）
-- `FnReaderRemote.submit()`：响应 `ignored == true` 时抛 `RemoteException`（带服务端 `reason` 与本机命中规则说明），不再静默当成功
-- `FnReaderBridgeService`：轮询循环里 `pending.debug` 命中时通知栏**一次性**提示「本机被服务端识别为调试设备，回传会被忽略，请改设备 ID / 名称」
-- 默认设备标识不触碰规则：`deviceId = AppConst.androidId`（十六进制串）、`deviceName = Build.MODEL`，正常手机不会被误判
+ID 追加 `busmon` / `monitor` / `mock` / `fake` / `e2e`，名称追加「监控」「测试机」；同时修掉调试工具把**真实书籍目录**
+写成 `http://debug.local/...` 的问题（调试设备回传不再参与真实解析）。
 
-契约其余部分复核无变化：任务类型 `search` / `toc` / `content` / `rank` / `bookinfo`，超时 `JOB_TIMEOUT_SEARCH/TOC = 18000 ms`、`CONTENT = 23000 ms`、
-`RANK = 23000 ms`、`BOOKINFO = 9000 ms`；鉴权仍是 `X-Api-Token`（回传）与 `X-Upload-Token`（传书，现取）；
-`/api/m/books`、`/api/m/progress/batch`、`/api/m/cover`、`/api/m/sources`、`/api/m/sources/sync`、`/api/m/cache` 路径与字段未变。
-字段表与自测清单见 `docs/app回传接受规范.md` §15。
+接口形状未变（`pending` 仍 `{jobs, waitMs, debug}`、`result` 仍回 `ignored:true`，任务类型 / 超时 / 令牌全部照旧），
+所以契约层面客户端**不动逻辑**，只把提示文案对齐：
 
-### 文档同步
+- `FnReaderRemote.submit()` 的失败原因改为「ID 含 bus-debug/busmon/monitor/mock/fake/e2e/debug，或名称含「调试」「监控」「测试机」」
+- `FnReaderRemote.Pending` 的 KDoc 写成 2.6.12 → 2.6.13 的判定演进
+- `FnReaderBridgeService` 通知文案保持不变（只说「改设备 ID / 名称」，不列关键字，避免通知栏过长）
 
-- `docs/阅读Pro.md`（本版章节改写为真实代码改动）、`README.md`（版本号与能力条目 +1）、`docs/app回传接受规范.md`（新增 §15）
-- 应用内 `assets/updateLog.md` 顶部新增 `**2026/11/17（2.6.12.1）**`，老段落保留
-- 服务端侧 `docs/更新日志.txt` 新增 2.6.12 一段；`docs/APP同步接口.md`（33802 B / `e04f3466…`）与 `docs/更新日志.md` 本轮仍是零改动
+### 二、手机解析改多线程（本版客户端性能改动）
+
+原来 `FnReaderBridgeService` 用「检索 2 并发 + 简介单并发」的协程跑任务，协程默认调度器的线程数受 `Dispatchers.IO`
+默认上限约束，慢源一多就互相等。本版改成**三条真线程池**，Pro 面向 8 核 / 2 大核（A72 及以上）的高性能机：
+
+| 线程池 | 装什么任务 | 线程数 |
+| --- | --- | --- |
+| `parseDispatcher` | search / toc / content / rank | 按 `availableProcessors()` 自适应：≥8 核 **6** 条、6 核 **4** 条、4 核 **3** 条、更低 **2** 条 |
+| `infoDispatcher` | bookinfo（**封面与简介**） | ≥8 核 **2** 条、其余 1 条，独占一池，永远不排在检索任务后面 |
+| `ebookDispatcher` | ebook-parse / ebook-chapter | **1** 条，整本解析独占，避免吃 CPU 的任务抢走检索与简介的线程 |
+
+- 三条池在服务启动时创建（守护线程，命名 `fnreader-parse` / `fnreader-info` / `fnreader-ebook`），`onDestroy` 时一起 `close()`，不会漏线程
+- 任务超时、回传格式、令牌、错误码全部不变；解析失败仍回 `ok:false` + 原因，服务端行为不受影响
+- 并发上限留了余量：8 核只开 6 条解析线程，避免把书源站点打到限流
+
+### 三、文档同步
+
+- `docs/阅读Pro.md` 新增本版章节（含线程池三件套说明）、`README.md` 更新「软总线三条线程池」能力条目与任务表
+- `docs/飞牛书库接入.md` 的队列段落改写为线程池口径（去掉「单并发 / 2 并发」旧说法）
+- `docs/app回传接受规范.md` 新增 §16（2.6.13 判定表 + 16.1 客户端落实 + 16.2 自测清单），三份副本（本地正本与两仓 docs）SHA 一致
+- 应用内 `assets/updateLog.md` 顶部新增 `**2026/11/17（2.6.13.1）**`，含 2.6.13 跟进 4 条 + 多线程 4 条，老段落保留
 
 ### 包信息
 
 | 产物 | 体积 | SHA256 |
 | --- | --- | --- |
-| `yuedu_pro_app_2.6.12.1-arm64.apk` | 18 776 027 B（17.90 MB） | `CFD059CA687D20FFC34AB3604A6C84C36E9801B38C29BE67DFE49DA1FC2777DC` |
-| `yuedu_pro_app_2.6.12.1-armv7.apk` | 18 731 052 B（17.86 MB） | `93C994850BB0353533F439114D6C7249E8920D235714246283BBA1584D584825` |
+| `yuedu_pro_app_2.6.13.1-arm64.apk` | 18 778 730 B（17.91 MB） | `EBA7CAD14775CF7D9A8AB05955B7C4382A2DAF661313409D2EC22C279012FC72` |
+| `yuedu_pro_app_2.6.13.1-armv7.apk` | 18 733 749 B（17.87 MB） | `E7746A5F09C75536B2C88E79F9C8ED04A3D6F7384E5DDD90CE74B4E54E4DD232` |
 
-- `aapt2 dump badging`：`package: name='io.legado.pro' versionCode='2061201' versionName='2.6.12.1'`，`sdkVersion:'24'`，`targetSdkVersion:'33'`，两个包无 `application-debuggable`
-- 包内 `assets/updateLog.md` 首条已核对为 `**2026/11/17（2.6.12.1）**`（`python zipfile` 解包读取）
+- `aapt2 dump badging`：`package: name='io.legado.pro' versionCode='2061301' versionName='2.6.13.1'`，两个包均无 `application-debuggable`
+- 包内 `assets/updateLog.md` 首条已核对为 `**2026/11/17（2.6.13.1）**`（`python zipfile` 解包读取）
 - 签名沿用 `keystore/yuedu.jks`（v1 + v2），可直接覆盖安装旧版
 
 ### 安装方式
@@ -47,6 +64,8 @@ Legado（阅读）`3.23.110211` 编译，**minSdk 24 / targetSdk 33**（Android 
 
 ### 自测与限制
 
-- 编译：Gradle 侧 `-Xmx2048m` + Kotlin daemon `-Xmx1024m` + `--max-workers=2`，两包各约 3–4 分钟，构建后可内存正常回落
-- 本版**未做模拟器冒烟**：MuMu 当时 `emulator-5554 offline`，且按内存约束未起模拟器；代码改动集中在上传/领任务分支，编译与包内校验已通过
-- 调试设备规则的自测步骤（真机 `debug:false` 正常领任务；把设备名改含「调试」后 `debug:true` 且回传得 `ignored:true`）写在 `docs/app回传接受规范.md` §15.2，待接真机时逐条跑
+- 编译：Gradle `-Xmx2048m` + Kotlin 守护进程 `-Xmx1536m` + `--max-workers=2`；本轮 arm64 前两次在 1024m Kotlin 堆下 `compileAppReleaseKotlin` OOM，
+  提到 1536m 后两 ABI 均一次通过（arm64 约 3 分钟）
+- 静态校验：线程池三处 `close()`、任务分流（bookinfo → info 池，ebook → ebook 池，其余 → parse 池）已逐行核对
+- **未做真机 / 模拟器冒烟**：MuMu 长期 `offline`，未起模拟器；并发压测（同一书源 4 条 search 是否触发限流）留待真机，
+  步骤见 `docs/app回传接受规范.md` §16.2 未勾选项

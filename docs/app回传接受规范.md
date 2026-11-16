@@ -374,3 +374,43 @@ POST /api/m/sources/sync                   X-Api-Token: …
 - [x] 调试设备身份回结果得 `ignored:true`，客户端按失败记录，任务仍留在队列等真机或超时
 - [x] `payload.debug=true` 的任务只出现在调试设备的 `pending` 里，普通设备列表为空
 - [x] 两仓 `FnReaderRemote.kt` / `FnReaderBridgeService.kt` 改动逐条对齐，A4 自有差异（`openWebShelf` 拼 `/app/legado-web`、`rawServer` 判 `/app/`、`serverBase` 的 path 分支）未动
+
+## 16 2.6.13（2026-11-17）：调试设备识别扩展（busmon 等）
+
+服务端 `b85fb31..737cd6e`（`release(v2.6.13)`）把 §15 的判定放宽，同时修掉调试工具污染真实数据的问题：
+
+```js
+// 2.6.13
+return /(bus[-_]?debug|busmon|\bmonitor\b|\bmock\b|\bfake\b|\be2e\b|\bdebug\b)/i.test(text) ||
+  /(调试|监控|测试机)/.test(text);
+```
+
+| 维度 | 2.6.12 | 2.6.13 |
+| --- | --- | --- |
+| 调试设备 ID 关键字 | `bus-debug` / `debug` | 追加 `busmon` / `monitor` / `mock` / `fake` / `e2e` |
+| 调试设备名称关键字 | 「调试」 | 追加「监控」「测试机」 |
+| 接口形状 | `pending` 带 `debug`，`result` 回 `ignored:true` | **未变** |
+| 任务类型 / 超时 / 令牌 | 不变 | **不变** |
+| 附带修复 | — | 调试设备回传不再参与真实解析，真实书籍目录不会再被写成 `http://debug.local/...` |
+
+### 16.1 客户端落实（2.6.13.1，两仓同构）
+
+- 契约本身无需改代码：`poll()` 仍读 `debug`，`submit()` 仍把 `ignored:true` 当失败。
+- 提示文案：`FnReaderRemote.submit()` 抛出的失败原因由「ID 含 bus-debug/debug，或名称含「调试」」
+  改为「ID 含 bus-debug/busmon/monitor/mock/fake/e2e/debug，或名称含「调试」「监控」「测试机」」，用户改名时能直接对照；
+  `Pending` 的 KDoc 同步更新。
+- 本机默认标识（`AppConst.androidId` + `Build.MODEL`）仍不会命中任何关键字。
+- 同版本还做了一处与契约无关的客户端优化：`FnReaderBridgeService` 的协程改成三条真线程池——
+  `parseDispatcher`（检索/目录/正文/榜单，Pro 按核数自适应 6 / 4 / 3 / 2 条，A4 固定 2 条）、
+  `infoDispatcher`（封面与简介独占，Pro 8 核 2 条、其余 1 条，A4 1 条）、`ebookDispatcher`（整本解析独占 1 条）。
+  这只影响本机吞吐，不改任何回传字段与超时。
+
+### 16.2 自测清单（2.6.13.1）
+
+- [x] 源码核对：两仓 `FnReaderRemote.kt` 的规则文案与 `remote.js` 完全对应，其余逻辑与 2.6.12.1 逐字一致
+- [x] 回归风险核对：`pending` / `result` 字段、任务类型、超时、令牌均未变，2.6.12.1 的行为可直接沿用
+- [x] 线程池核对：两仓 `FnReaderBridgeService.kt` 三条 dispatcher 均在建服务时创建、`onDestroy` 时 `close()`，
+      检索/简介/电子书互不占位；A4 的检索线程数固定 2，Pro 按 `availableProcessors()` 自适应
+- [ ] 真机把设备名改成含「监控」后 `pending` 返回 `debug:true`（当前无真机在线，待补跑）
+- [ ] 名称含「测试机」的设备回结果得 `ignored:true` 且任务留在队列（同上，待补跑）
+- [ ] 并发压测：同时派 4 条 search 到同源，观察是否被站点限流（待真机跑，Pro 6 条线程更明显）

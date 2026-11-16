@@ -13,7 +13,7 @@ room 2.6.0 / okhttp 4.11.0 / compileSdk 34）在 JDK 17 上可稳定构建，且
 | `app/build.gradle` | `applicationId` → `io.legado.pro`（与官方版、API19 版共存） |
 | `app/build.gradle` | `minSdk 19 → 24`，`targetSdk 30 → 33` |
 | `app/build.gradle` | 新增 `-PtargetAbi=armv7/arm64` 开关，决定 `abiFilters` 与产物名后缀 |
-| `app/build.gradle` | `versionCode 19001 → 2061201`（当前 2.6.12.1），输出名 `${appName}_${flavor}_${version}${abiSuffix}.apk` |
+| `app/build.gradle` | `versionCode 19001 → 2061301`（当前 2.6.13.1），输出名 `${appName}_${flavor}_${version}${abiSuffix}.apk` |
 | `modules/book`、`modules/rhino1.7.3` | `minSdk 24`、`targetSdk 33`，与主模块一致 |
 | `res/values*/strings.xml` | `app_name` → 阅读Pro（含 zh / zh-HK / zh-TW 三个语言目录） |
 | `AndroidManifest.xml` | 删除 `<uses-sdk tools:overrideLibrary=...>`（三方库 minSdk 21 < 24，合并无需 override） |
@@ -74,6 +74,22 @@ DEX：6 个（`classes.dex` ~8.6MB、`classes2.dex` 仅 2.9KB、`classes3.dex` ~
 - **真机运行验证**：测试机 adb 掉线，未实测启动、搜索、阅读。接上 USB 后跑 `scripts/verify_device.bat`。
 - 应用内「检查更新」仍指向 Legado 官方仓库，换成本仓库的 Release 需要改 `AppUpdateService` 的地址。
 - 未做混淆/资源压缩（`minifyEnabled false`），体积偏大，后续可按需开启。
+
+## 2.6.13.1（versionCode 2061301）：跟进 2.6.13 调试设备识别扩展
+
+服务端 2.6.13（`737cd6e`，2026-11-17 04:22）把 2.6.12 的调试设备判定放宽：ID 追加 `busmon` / `monitor` / `mock` / `fake` / `e2e`，
+名称追加「监控」「测试机」；同时修掉调试工具把真实书籍目录写成 `http://debug.local/...` 的问题（调试设备回传不再参与真实解析）。
+接口形状、任务类型、超时、令牌全部未变，所以本版客户端**不动逻辑**，只把提示文案对齐新规则。
+
+- **`FnReaderRemote.submit()`**：回传被忽略时抛出的失败原因改为「ID 含 bus-debug/busmon/monitor/mock/fake/e2e/debug，
+  或名称含「调试」「监控」「测试机」」，用户对着改设备 ID / 名称时不用再猜规则
+- **`Pending` 的 KDoc**：同步写成 2.6.12 → 2.6.13 的判定演进，避免下次再改时对不上服务端
+- `FnReaderBridgeService` 的通知文案保持不变（它只说「改设备 ID / 名称」，不列关键字，避免通知栏过长）
+- **手机解析改多线程（本版新增，与文档无关的客户端优化）**：原来的「检索 2 并发 + 简介单并发」协程改成三条真线程池——
+  `parseDispatcher` 按 CPU 核数自适应（≥8 核 6 条、6 核 4 条、4 核 3 条、更低 2 条），
+  `infoDispatcher` 独占封面与简介（≥8 核 2 条、其余 1 条），`ebookDispatcher` 独占整本解析；
+  服务 `onDestroy` 时三者一起 `close()`，不会漏线程
+- 字段表与自测清单见 `docs/app回传接受规范.md` §16
 
 ## 2.6.12.1（versionCode 2061201）：跟进 2.6.12 调试设备契约，改了 2 个文件
 
