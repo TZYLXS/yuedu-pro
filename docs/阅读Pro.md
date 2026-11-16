@@ -13,7 +13,7 @@ room 2.6.0 / okhttp 4.11.0 / compileSdk 34）在 JDK 17 上可稳定构建，且
 | `app/build.gradle` | `applicationId` → `io.legado.pro`（与官方版、API19 版共存） |
 | `app/build.gradle` | `minSdk 19 → 24`，`targetSdk 30 → 33` |
 | `app/build.gradle` | 新增 `-PtargetAbi=armv7/arm64` 开关，决定 `abiFilters` 与产物名后缀 |
-| `app/build.gradle` | `versionCode 19001 → 2061001`（当前 2.6.10.1），输出名 `${appName}_${flavor}_${version}${abiSuffix}.apk` |
+| `app/build.gradle` | `versionCode 19001 → 2061101`（当前 2.6.11.1），输出名 `${appName}_${flavor}_${version}${abiSuffix}.apk` |
 | `modules/book`、`modules/rhino1.7.3` | `minSdk 24`、`targetSdk 33`，与主模块一致 |
 | `res/values*/strings.xml` | `app_name` → 阅读Pro（含 zh / zh-HK / zh-TW 三个语言目录） |
 | `AndroidManifest.xml` | 删除 `<uses-sdk tools:overrideLibrary=...>`（三方库 minSdk 21 < 24，合并无需 override） |
@@ -74,6 +74,17 @@ DEX：6 个（`classes.dex` ~8.6MB、`classes2.dex` 仅 2.9KB、`classes3.dex` ~
 - **真机运行验证**：测试机 adb 掉线，未实测启动、搜索、阅读。接上 USB 后跑 `scripts/verify_device.bat`。
 - 应用内「检查更新」仍指向 Legado 官方仓库，换成本仓库的 Release 需要改 `AppUpdateService` 的地址。
 - 未做混淆/资源压缩（`minifyEnabled false`），体积偏大，后续可按需开启。
+
+## 2.6.11.1（versionCode 2061101）：仅跟进文档，无代码改动
+
+服务端 2.6.11 只改应用信息里的开发者 / 维护者 / 发布者：`docs/fnos-fpk-build.md` 的 `maintainer`、`maintainer_url`、
+`distributor` 示例换成 `TZYLXS`，`legado-web/manifest` 与 `web/index.html` 也只动这几行；新增 `docs/软总线调试APK.md`
+属调试工具说明。`docs/APP同步接口.md`、`docs/更新日志.md` 零改动，`server.js` 未动，本版代码与 2.6.10.1 逐字一致。
+
+- **2.6.11（本次跟进）**：开发者 / 维护者 / 发布者统一为 `TZYLXS`，`maintainer_url` 指向 `https://github.com/TZYLXS`
+- `docs/软总线调试APK.md`（207 行）描述 `tools/bus-debug-app` 调试 APK 的用法与软总线协议，独立于两端客户端
+- 契约复核：任务类型 `search` / `toc` / `content` / `rank` / `bookinfo`、超时 18 / 18 / 23 / 23 / 9 秒、
+  `X-Api-Token` 与传书 `X-Upload-Token`（现取）全部未变
 
 ## 2.6.10.1（versionCode 2061001）：仅跟进文档，无代码改动
 

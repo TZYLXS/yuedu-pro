@@ -337,11 +337,11 @@ POST /api/m/sources/sync                   X-Api-Token: …
 超时 `JOB_TIMEOUT_SEARCH/TOC = 18000 ms`、`CONTENT = 23000 ms`、`RANK = 23000 ms`、`BOOKINFO = 9000 ms`；
 鉴权仍是 `X-Api-Token`（回传）与 `X-Upload-Token`（传书，现取）；
 `/api/m/books`、`/api/m/progress/batch`、`/api/m/cover`、`/api/m/sources`、`/api/m/sources/sync`、
-`/api/m/cache`、`/api/m/remote/pending|result` 的路径、参数、回传字段全部未变。客户端 2.6.10.1 代码一行未改（与 2.6.8.1、2.6.7.1 逐字一致）。
+`/api/m/cache`、`/api/m/remote/pending|result` 的路径、参数、回传字段全部未变。客户端 2.6.11.1 代码一行未改（与 2.6.8.1、2.6.7.1 逐字一致）。
 
-自测清单（2.6.10.1 已逐条核对）：
+自测清单（2.6.11.1 已逐条核对）：
 
 - [x] 两仓 `FnReaderRemote.kt` / `FnReaderBridgeService.kt` 代码与 2.4.4.1 完全一致，SHA256 未变
 - [x] 面板 ①–⑧ 与本文档 §5 / §8 / §9 / §13 / §14 一致，无 ⑧⑨ 旧自动按钮残留
-- [x] 首启更新日志首条为 `2026/11/17（2.6.10.1）`，老段落保留
+- [x] 首启更新日志首条为 `2026/11/17（2.6.11.1）`，老段落保留
 - [x] `toc` / `content` 任务字段表与 `/api/m/content` 实际响应（2.6.6 净化后）逐字段比对通过
