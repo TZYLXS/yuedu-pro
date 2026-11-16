@@ -441,3 +441,40 @@ return /(bus[-_]?debug|busmon|\bmonitor\b|\bmock\b|\bfake\b|\be2e\b|\bdebug\b)/i
 - [x] 联调核对：MuMu 实装 2.6.16.1 后连上服务端，显示「已连接 FnReader 2.6.15（保活中）」
 - [ ] 真机观察 `usage.phoneContent` 增长（服务端 2.6.15 已上线，待有书可解析时确认）
 - [ ] 递归保护 502 的客户端表现（构造自我引用书源，确认客户端按失败记录，待真机跑）
+
+## 18 2.6.17 – 2.6.18（2026-11-17）：软总线加权路由、领取锁定与封面/简介拆分，客户端有改动
+
+- 上游提交区间 `b639ec2..ecf040`，变更文件 10 个：新增 `AGENTS.md`、`docs/软总线路由与权重.md`、
+  `legado-web/app/server/src/busweights.js`；修改 `docs/APP同步接口.md`（+6/-1）、`docs/更新日志.txt`（+15）、
+  `docs/软总线调试APK.md`（+10）、`legado-web/app/server/src/remote.js`（+149/-34）、
+  `legado-web/app/server/src/server.js`（+44/-3）、`index.html`、`manifest`（2.6.18）。
+- **2.6.17**：任务分三类——`book`（search/toc/rank）、`content`（content/ebook-parse/ebook-chapter）、
+  `media`（cover/intro/bookinfo）；每台设备维护 0–100 隐藏性能分（初始 50，成功 +4、失败 −8、>8s 再 −2），
+  分数不对外暴露；`score>=55` 为高分设备（可领全部类，在途上限 3），`<55` 为低分设备（只领 media，上限 2）；
+  无高分设备在线时自动放开全部任务。领取即写 `dispatchedTo` 锁定 30 秒；结果幂等，重复回传返回 `duplicate`，
+  非锁定设备回传丢弃返回 `stale`；权重计算独立成纯函数模块 `busweights.js`，异常自动降级。
+- **2.6.18**：在途数改为按实际锁定任务重算，修复异常路径的 inflight 泄漏（设备被卡死不再领任务）；
+  隐藏分与内部统计从 `/api/bus` 设备列表移除，仅服务端内部使用；`/api/bus` 增加 `highScore`/`lowScore` 计数。
+- **接口形状**：`pending` 响应仍是 `{jobs, waitMs, debug}`，每个 job 多带 `taskClass` 字段；
+  `result` 成功仍回 `{ok:true, accepted:true}`，新增字符串态 `ok:"duplicate"` / `ok:"stale"`，调试设备仍回 `ignored:true`。
+
+### 18.1 客户端落实（2.6.18.1，两仓同构）
+
+- 新增任务类型 `cover` / `intro`，payload 与 bookinfo 相同 `{bookUrl, source, name, author}`：
+  - 抽出 `fetchMediaBook(payload)`，bookinfo / cover / intro 共用同一次 `WebBook.getBookInfoAwait`；
+  - `cover()` 只回 `{coverUrl}`（服务端兼容读 `url`），`intro()` 回 `{intro, author, kind, wordCount, lastChapter, totalChapterNum}`；
+  - 拿不到的字段一律省略，不硬塞空串；不支持时服务端自动回退 bookinfo。
+- `submit()` 幂等识别：`ok` 为 `duplicate` / `stale` 时直接正常返回（不抛错、不重试），`ignored` 仍按调试设备失败抛出。
+- 队列路由：`FnReaderBridgeService` 把 `bookinfo` / `cover` / `intro` 统一送 info 队列，检索任务仍走 search 队列，
+  ebook 走 ebook 队列；线程池大小与超时（18/18/23/23/9 秒）不变，服务端 `maxInflight` 在派发侧限流、与本机线程池不冲突。
+- A4 保持低性能机口径（检索 2、简介 1），Pro 保持按核数自适应。
+
+### 18.2 自测清单（2.6.18.1）
+
+- [x] 文档 SHA 核对：`APP同步接口.md` 33 802 → 34 273 B、`更新日志.txt` 41 867 → 43 194 B、`更新日志.md` 25 298 B 未变
+- [x] 变更文件核对：`b639ec2...ecf040` 共 10 个文件，含 `remote.js`/`busweights.js` 真实契约改动
+- [x] 代码核对：两仓 `execute()` 覆盖 cover/intro，`fetchMediaBook` 三处共用，无重复函数；`submit()` 三态（duplicate/stale/ignored）齐全
+- [x] 队列核对：两仓 cover/intro 均进 info 队列，不与检索抢线程
+- [ ] 真机派 `cover` 任务确认只回 coverUrl、派 `intro` 确认回简介元数据（待真机/服务端实派）
+- [ ] 重复回传同一 id 得 `ok:"duplicate"`、锁过期后回传得 `ok:"stale"`（待真机构造）
+- [ ] 观察 `/api/bus` 的 `highScore`/`lowScore` 随设备成败变化（隐藏分本身不暴露，只看计数）

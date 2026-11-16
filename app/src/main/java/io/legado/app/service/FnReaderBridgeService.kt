@@ -307,7 +307,9 @@ class FnReaderBridgeService : BaseService() {
                 for (job in jobs) {
                     val item = QueuedJob(base, token, job, onlineText)
                     when (job.type) {
-                        "bookinfo" -> infoQueue.trySend(item)
+                        // media 类（bookinfo 及 2.6.17 拆分出的 cover/intro）统一走简介队列，
+                        // 不和检索任务抢线程
+                        "bookinfo", "cover", "intro" -> infoQueue.trySend(item)
                         // 电子书解析：下载整本 → 本地解析 → 分片回传
                         "ebook-parse" -> ebookQueue.trySend(item)
                         // 目录先行（toc-only）之后，飞牛按需来要某一章

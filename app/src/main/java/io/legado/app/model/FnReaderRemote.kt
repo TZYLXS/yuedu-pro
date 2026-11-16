@@ -149,6 +149,14 @@ object FnReaderRemote {
                     "改动其一后重连即可正常回传"
             )
         }
+        // 2.6.17 起结果幂等，服务端 ok 可能回字符串：
+        //  - duplicate：同一任务已回传过，服务端不重复触发业务，属正常，不重试也不报错；
+        //  - stale：30 秒领取锁过期后任务被别的设备领走，本次回传被丢弃，同样无需重试。
+        if (obj != null) {
+            when (obj.opt("ok")) {
+                "duplicate", "stale" -> return@withContext
+            }
+        }
     }
 
     /**
@@ -380,6 +388,9 @@ object FnReaderRemote {
             "content" -> content(job.payload)
             "rank" -> rank(job.payload)
             "bookinfo" -> bookInfo(job.payload)
+            // 2.6.17 起 bookinfo 拆成 cover / intro 两个任务并行下发
+            "cover" -> cover(job.payload)
+            "intro" -> intro(job.payload)
             else -> throw RemoteException("不支持的任务类型：${job.type}")
         }
     }
@@ -529,6 +540,25 @@ object FnReaderRemote {
      * 字段全部可选，拿不到就省略——回空串服务端会当成「这书没简介」不再重试，所以宁缺勿滥。
      */
     private suspend fun bookInfo(payload: JSONObject): JSONObject {
+        val info = fetchMediaBook(payload)
+        val introText = info.intro?.let { plainText(it) }
+        return JSONObject().apply {
+            if (!introText.isNullOrBlank()) put("intro", introText)
+            info.author?.takeIf { it.isNotBlank() }?.let { put("author", it) }
+            info.coverUrl?.takeIf { it.isNotBlank() }?.let { put("coverUrl", it) }
+            info.kind?.takeIf { it.isNotBlank() }?.let { put("kind", it) }
+            info.wordCount?.takeIf { it.isNotBlank() }?.let { put("wordCount", it) }
+            info.latestChapterTitle?.takeIf { it.isNotBlank() }?.let { put("lastChapter", it) }
+            if (info.totalChapterNum > 0) put("totalChapterNum", info.totalChapterNum)
+        }
+    }
+
+    /**
+     * 2.6.17 起把 bookinfo 拆成 cover / intro 两个任务并行下发（payload 与 bookinfo 相同：
+     * {bookUrl, source, name, author}）。bookinfo / cover / intro 共用这一次详情抓取，
+     * 再按任务类型只回对应字段；拿不到的字段省略，服务端会自动回退到 bookinfo，不要硬塞空串。
+     */
+    private suspend fun fetchMediaBook(payload: JSONObject): Book {
         val bookUrl = payload.optString("bookUrl")
         if (bookUrl.isEmpty()) throw RemoteException("任务里没有书籍详情页地址")
         val bs = matchSource(payload.optString("source"), bookUrl)
@@ -541,12 +571,24 @@ object FnReaderRemote {
             name = payload.optString("name")
             author = payload.optString("author")
         }
-        val info = WebBook.getBookInfoAwait(bs, book)
-        val intro = info.intro?.let { plainText(it) }
+        return WebBook.getBookInfoAwait(bs, book)
+    }
+
+    /** 只取封面：服务端读 data.coverUrl（或 data.url），取不到就回空对象 */
+    private suspend fun cover(payload: JSONObject): JSONObject {
+        val info = fetchMediaBook(payload)
         return JSONObject().apply {
-            if (!intro.isNullOrBlank()) put("intro", intro)
-            info.author?.takeIf { it.isNotBlank() }?.let { put("author", it) }
             info.coverUrl?.takeIf { it.isNotBlank() }?.let { put("coverUrl", it) }
+        }
+    }
+
+    /** 只取简介与元数据：字段全部可选，拿不到就省略 */
+    private suspend fun intro(payload: JSONObject): JSONObject {
+        val info = fetchMediaBook(payload)
+        val introText = info.intro?.let { plainText(it) }
+        return JSONObject().apply {
+            if (!introText.isNullOrBlank()) put("intro", introText)
+            info.author?.takeIf { it.isNotBlank() }?.let { put("author", it) }
             info.kind?.takeIf { it.isNotBlank() }?.let { put("kind", it) }
             info.wordCount?.takeIf { it.isNotBlank() }?.let { put("wordCount", it) }
             info.latestChapterTitle?.takeIf { it.isNotBlank() }?.let { put("lastChapter", it) }

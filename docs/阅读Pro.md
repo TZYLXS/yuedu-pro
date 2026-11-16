@@ -75,6 +75,25 @@ DEX：6 个（`classes.dex` ~8.6MB、`classes2.dex` 仅 2.9KB、`classes3.dex` ~
 - 应用内「检查更新」仍指向 Legado 官方仓库，换成本仓库的 Release 需要改 `AppUpdateService` 的地址。
 - 未做混淆/资源压缩（`minifyEnabled false`），体积偏大，后续可按需开启。
 
+## 2.6.18.1（versionCode 2061801）：跟进加权路由，新增 cover/intro 与幂等识别
+
+服务端 2.6.17 / 2.6.18（`b639ec2..ecf040`）把软总线从「所有设备抢同一队列」升级为加权路由，本版有真实代码改动，改了 2 个源文件：
+
+- **2.6.17 机制**：任务分 `book`（search/toc/rank）、`content`（content/ebook）、`media`（cover/intro/bookinfo）三类；
+  每台设备维护 0–100 隐藏性能分（初始 50，成功 +4、失败 −8、>8s 再 −2，不对外暴露），`score>=55` 高分可领全部类、
+  在途上限 3，`<55` 低分只领 media、上限 2；无高分设备在线时自动放开全部任务。领取即写 `dispatchedTo` 锁定 30 秒；
+  权重计算独立成纯函数模块 `busweights.js`，异常自动降级。
+- **2.6.18 修复**：在途数按实际锁定任务重算，修掉异常路径 inflight 泄漏把设备卡死；隐藏分与内部统计从 `/api/bus` 移除，
+  新增 `highScore`/`lowScore` 计数。
+
+客户端落实（`FnReaderRemote.kt` + `FnReaderBridgeService.kt`）：
+
+- 新增 `cover` / `intro` 任务，payload 与 bookinfo 相同 `{bookUrl, source, name, author}`：抽出 `fetchMediaBook()`，
+  bookinfo/cover/intro 共用同一次 `WebBook.getBookInfoAwait`；`cover()` 只回 `{coverUrl}`，`intro()` 回简介与元数据，
+  拿不到的字段省略；不支持时服务端自动回退 bookinfo。
+- `submit()` 识别幂等字符串态：`ok:"duplicate"`/`"stale"` 正常返回不重试，`ignored` 仍按调试设备失败抛出。
+- 队列路由：`bookinfo`/`cover`/`intro` 统一进 info 队列；线程池大小与超时（18/18/23/23/9 秒）不变。
+
 ## 2.6.16.1（versionCode 2061601）：仅跟进文档，无代码改动
 
 服务端 2.6.14 / 2.6.15 / 2.6.16 三版（`737cd6e..b639ec2`）全是服务端侧改动，客户端契约零变化：
