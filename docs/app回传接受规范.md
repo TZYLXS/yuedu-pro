@@ -337,11 +337,40 @@ POST /api/m/sources/sync                   X-Api-Token: …
 超时 `JOB_TIMEOUT_SEARCH/TOC = 18000 ms`、`CONTENT = 23000 ms`、`RANK = 23000 ms`、`BOOKINFO = 9000 ms`；
 鉴权仍是 `X-Api-Token`（回传）与 `X-Upload-Token`（传书，现取）；
 `/api/m/books`、`/api/m/progress/batch`、`/api/m/cover`、`/api/m/sources`、`/api/m/sources/sync`、
-`/api/m/cache`、`/api/m/remote/pending|result` 的路径、参数、回传字段全部未变。客户端 2.6.11.1 代码一行未改（与 2.6.8.1、2.6.7.1 逐字一致）。
+`/api/m/cache`、`/api/m/remote/pending|result` 的路径、参数、回传字段全部未变。客户端在 2.6.8.1 – 2.6.11.1 期间代码一行未改（与 2.6.8.1、2.6.7.1 逐字一致），2.6.12.1 起因调试设备规则才动了两个文件（见 §15）。
 
-自测清单（2.6.11.1 已逐条核对）：
+自测清单（2.6.8.1 – 2.6.11.1 期间逐条核对）：
 
 - [x] 两仓 `FnReaderRemote.kt` / `FnReaderBridgeService.kt` 代码与 2.4.4.1 完全一致，SHA256 未变
 - [x] 面板 ①–⑧ 与本文档 §5 / §8 / §9 / §13 / §14 一致，无 ⑧⑨ 旧自动按钮残留
-- [x] 首启更新日志首条为 `2026/11/17（2.6.11.1）`，老段落保留
+- [x] 各版首启更新日志首条为本版，老段落保留
 - [x] `toc` / `content` 任务字段表与 `/api/m/content` 实际响应（2.6.6 净化后）逐字段比对通过
+
+## 15 2.6.12（2026-11-17）：软总线忽略调试设备回传（本版唯一的客户端契约变更）
+
+服务端 `remote.js` 新增 `isDebugDevice(id, name)`：把 `id` 与 `name` 拼成一个字符串，
+命中 `/(bus[-_]?debug|\bdebug\b)/i` 或含「调试」即判为调试设备。围绕这个判定改了三处：
+
+| 位置 | 2.6.12 的行为 | 客户端要做什么 |
+| --- | --- | --- |
+| `hello()` 登记设备 | 设备记录新增 `debug` 字段 | 无需上报，服务端自己判 |
+| `GET /api/m/remote/pending` | 响应新增 `debug: true/false`（当前请求方是否被判为调试设备）；`id` 取 `?id=` 或 `X-Device-Id` | 解析 `debug`，命中时提示用户改设备 ID / 名称 |
+| `POST /api/m/remote/result` | 调试设备回传直接丢弃：`200 {ok:true, accepted:false, ignored:true, reason:"调试设备结果已忽略"}`，任务不 resolve、不计 `handled` | 必须把 `ignored:true` 当失败，不能静默当成功 |
+
+任务分流：`create()` 时给 job 打 `debug = payload.debug === true`；`pending()` 按请求方身份过滤——
+普通设备只拿非调试任务（真机不再收到调试任务），调试设备只拿 `payload.debug=true` 的调试任务。
+
+### 15.1 客户端落实（2.6.12.1，两仓同构）
+
+- `FnReaderRemote.poll()` 返回值由 `List<Job>` 改为 `Pending(jobs, debug)`：先按对象取 `jobs`，再读 `debug`（缺省 `false`，兼容 2.6.11 及更早服务端）。
+- `FnReaderBridgeService` 轮询循环：`pending.debug && !debugWarned` 时通知栏一次性提示「本机被服务端识别为调试设备，回传会被忽略，请改设备 ID / 名称」，避免每秒刷通知。
+- `FnReaderRemote.submit()`：响应体若 `ignored == true`，抛 `RemoteException`，消息带上服务端 `reason` 与命中规则说明；三处调用点都在 `runCatching` 内，会被记成明确失败。
+- 本机默认设备标识不触碰规则：`deviceId = AppConst.androidId`（十六进制串）、`deviceName = Build.MODEL`，正常手机不会被误判。
+
+### 15.2 自测清单（2.6.12.1）
+
+- [x] 真机 / 模拟器（androidId + 机型名）`pending` 返回 `debug:false`，普通 `search` / `bookinfo` 任务照常领到
+- [x] 把设备名改成含「调试」后 `pending` 返回 `debug:true`，通知栏出现一次提示
+- [x] 调试设备身份回结果得 `ignored:true`，客户端按失败记录，任务仍留在队列等真机或超时
+- [x] `payload.debug=true` 的任务只出现在调试设备的 `pending` 里，普通设备列表为空
+- [x] 两仓 `FnReaderRemote.kt` / `FnReaderBridgeService.kt` 改动逐条对齐，A4 自有差异（`openWebShelf` 拼 `/app/legado-web`、`rawServer` 判 `/app/`、`serverBase` 的 path 分支）未动

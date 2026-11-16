@@ -41,6 +41,16 @@ object FnReaderRemote {
         val age: Long
     )
 
+    /**
+     * 领任务的结果。2.6.12 起服务端会判定本机是否为「调试设备」
+     * （ID 含 bus-debug/debug，或名称含「调试」），调试设备的回传一律被丢弃，
+     * 所以这里把 debug 一起带回来，由调用方提示用户改设备 ID / 名称。
+     */
+    data class Pending(
+        val jobs: List<Job>,
+        val debug: Boolean
+    )
+
     /** 补协议、去尾部斜杠；空串原样返回 */
     fun normalizeBase(raw: String): String {
         var s = raw.trim().trimEnd('/')
@@ -66,7 +76,7 @@ object FnReaderRemote {
         deviceName: String = "",
         deviceModel: String = "",
         appVer: String = ""
-    ): List<Job> = withContext(Dispatchers.IO) {
+    ): Pending = withContext(Dispatchers.IO) {
         val query = StringBuilder("?wait=$waitMs&limit=$limit")
         if (deviceId.isNotEmpty()) query.append("&id=").append(Uri.encode(deviceId))
         if (deviceName.isNotEmpty()) query.append("&name=").append(Uri.encode(deviceName))
@@ -75,9 +85,11 @@ object FnReaderRemote {
         val url = "$base/api/m/remote/pending$query"
         val (code, body) = request("GET", url, token, null, waitMs + 15000)
         if (code !in 200..299) throw RemoteException(explain(code, body))
-        val array = runCatching { JSONObject(body).optJSONArray("jobs") }.getOrNull()
+        val obj = runCatching { JSONObject(body) }.getOrNull()
             ?: throw RemoteException("返回的不是任务 JSON：${body.take(80)}")
-        (0 until array.length()).mapNotNull { i ->
+        val array = obj.optJSONArray("jobs")
+            ?: throw RemoteException("返回的不是任务 JSON：${body.take(80)}")
+        val jobs = (0 until array.length()).mapNotNull { i ->
             array.optJSONObject(i)?.let {
                 Job(
                     id = it.optString("id"),
@@ -87,6 +99,7 @@ object FnReaderRemote {
                 )
             }
         }.filter { it.id.isNotEmpty() && it.type.isNotEmpty() }
+        Pending(jobs = jobs, debug = obj.optBoolean("debug", false))
     }
 
     /**
@@ -125,6 +138,16 @@ object FnReaderRemote {
         val url = "$base/api/m/remote/result"
         val (code, body) = request("POST", url, token, payload.toString(), 20000)
         if (code !in 200..299) throw RemoteException(explain(code, body))
+        // 2.6.12 起：本机若被判为调试设备，服务端返回 {ok:true, accepted:false, ignored:true}，
+        // 结果被直接丢弃、任务还在等真正的设备。这里必须当失败抛出去，否则会误以为传成功了。
+        val obj = runCatching { JSONObject(body) }.getOrNull()
+        if (obj != null && obj.optBoolean("ignored", false)) {
+            val why = obj.optString("reason").ifEmpty { "调试设备结果已忽略" }
+            throw RemoteException(
+                "$why：本机设备 ID 或名称命中调试规则（ID 含 bus-debug/debug，或名称含「调试」），" +
+                    "改动其一后重连即可正常回传"
+            )
+        }
     }
 
     /**

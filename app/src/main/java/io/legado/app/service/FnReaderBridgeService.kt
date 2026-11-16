@@ -168,6 +168,8 @@ class FnReaderBridgeService : BaseService() {
             var onlineText = ""
             var lastInfoAt = 0L
             var lastAutoSyncAt = 0L
+            // 服务端把本机判成调试设备时只提示一次，别每秒刷通知
+            var debugWarned = false
             // 两条队列各自的常驻工作者：检索 2 并发，简介单并发
             repeat(SEARCH_CONCURRENCY) {
                 launch {
@@ -230,7 +232,7 @@ class FnReaderBridgeService : BaseService() {
                         }
                     }
                 }
-                val jobs = try {
+                val pending = try {
                     FnReaderRemote.poll(
                         base = base,
                         token = token,
@@ -252,6 +254,13 @@ class FnReaderBridgeService : BaseService() {
                     continue
                 }
                 lastError = ""
+                // 2.6.12 起服务端会给 pending 带 debug 标记；命中调试规则的设备回传会被丢弃
+                if (pending.debug && !debugWarned) {
+                    debugWarned = true
+                    notificationContent = "本机被服务端识别为调试设备，回传会被忽略，请改设备 ID / 名称"
+                    upNotification()
+                }
+                val jobs = pending.jobs
                 if (jobs.isEmpty()) {
                     notificationContent = onlineText.ifEmpty { "已连接　待命中" }
                     upNotification()
