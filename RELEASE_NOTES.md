@@ -1,43 +1,40 @@
-## 阅读Pro 2.6.18.1（versionCode 2061801）
+## 阅读Pro 2.6.18.2（versionCode 2061802）
 
 Legado（阅读）`3.23.110211` 编译，**minSdk 24 / targetSdk 33**（Android 7.0+），分 **arm64-v8a** 与 **armeabi-v7a** 两个产物。
 应用名「阅读Pro」，包名 `io.legado.pro`，可与官方版、安卓 4.0 版共存安装。
-与 **安卓 4.0 版（`io.legado.api19`）2.6.18.1** 同步发布、同一套版本号；版号基线取自服务端 `legado-web` **v2.6.18**，本版为其上的 `0.0.0.1` 小更新。
+与 **安卓 4.0 版（`io.legado.api19`）2.6.18.2** 同步发布、同一套版本号；版号基线取自服务端 `legado-web` **v2.6.18**。
 
-### 本版变更：软总线加权路由 + 封面/简介拆分（有真实代码改动）
+### 本版仅跟进文档，无代码改动
 
-服务端在 2.6.16 之后推进 2.6.17 / 2.6.18（`b639ec2..ecf040`），把软总线从「所有设备抢同一队列」升级为加权路由：
+上游 `ecf0408..c3922a3` 有 2 个提交、2 个文件变化：
 
-- **任务分三类**：`book`（search/toc/rank）、`content`（content/ebook-parse/ebook-chapter）、`media`（cover/intro/bookinfo）
-- **隐藏性能分（0–100，不对外暴露）**：初始 50，成功 +4、失败 −8、>8s 再 −2；`score>=55` 高分可领全部类、在途上限 3，
-  `<55` 低分只领 media、上限 2；无高分设备在线时自动放开全部任务
-- **领取即锁定 30 秒**：写 `dispatchedTo`，其它设备不重复领；结果幂等——重复回传返回 `duplicate`、非锁定设备回传丢弃返回 `stale`；
-  权重计算独立成纯函数模块 `busweights.js`，异常自动降级
-- **2.6.18 修复**：在途数按实际锁定任务重算，修掉异常路径 inflight 泄漏把设备卡死；隐藏分从 `/api/bus` 移除，新增 `highScore`/`lowScore` 计数
+- `6bfdbdc6`：`AGENTS.md` 新增上游环境专用的工具调用约定（+11），与安卓客户端接口无关
+- `c3922a35`：`docs/软总线调试APK.md` 新增 §6.3（+29），补充 `GET /api/bus` 在线设备字段与历史实测快照
 
-客户端落实（`FnReaderRemote.kt` + `FnReaderBridgeService.kt`）：
+新增说明的 `devices[]` 字段为 `id`、`name`、`model`、`version`、`lastSeen`、`handled`、`enabled`、`debug`、`online`、`idle`，
+顶层另有 `pending`、`recent`、`usage`。这些都是面板⑦的只读信息，客户端现有 `GET /api/bus` 调用不需要修改。
 
-- 新增 `cover` / `intro` 任务，payload 与 bookinfo 相同 `{bookUrl, source, name, author}`：抽出 `fetchMediaBook()`，
-  bookinfo/cover/intro 共用同一次 `WebBook.getBookInfoAwait`；`cover()` 只回 `{coverUrl}`，`intro()` 回简介与元数据，
-  拿不到的字段省略；不支持时服务端自动回退 bookinfo
-- `submit()` 识别幂等字符串态：`ok:"duplicate"`/`"stale"` 正常返回不重试，`ignored` 仍按调试设备失败抛出
-- 队列路由：`bookinfo`/`cover`/`intro` 统一进 info 队列；线程池大小与超时（18/18/23/23/9 秒）不变
+三份重点文档 blob 与 2.6.18 基线一致：`APP同步接口.md` = `6b9b701f…`、`更新日志.md` = `84c99abc…`、
+`更新日志.txt` = `f1099dcb…`；compare 不含 `remote.js` / `server.js`，所以 `/api/m/*` 路径、字段、鉴权、任务类型与超时均无变化。
+
+**文档口径校正**：`cover` / `intro` 在 `timeoutOf()` 中没有独立分支，当前实际使用 default **20 秒**；
+`bookinfo` 独立分支仍为 9 秒。本版只把 README 与接入文档中的 cover/intro 超时改为 20 秒，没有修改客户端代码。
 
 ### 文档同步
 
-- `docs/阅读Pro.md` 新增本版章节、`README.md` 版本号/下载表/能力清单更新
-- `docs/app回传接受规范.md` 新增 §18（含 18.1 落实、18.2 自测清单），本地正本与两仓 docs 三份副本 SHA 一致
-- 应用内 `assets/updateLog.md` 顶部新增 `**2026/11/17（2.6.18.1）**`，老段落保留
+- `README.md`、`docs/阅读Pro.md`、`docs/飞牛书库接入.md` 更新到本版并补充 `/api/bus` 字段表
+- `docs/app回传接受规范.md` 新增 §19，本地正本与两仓 docs 三份副本 SHA256 一致
+- 应用内 `assets/updateLog.md` 顶部新增 `**2026/11/17（2.6.18.2）**`，旧段落保留
 
 ### 包信息
 
 | 产物 | 体积 | SHA256 |
 | --- | --- | --- |
-| `yuedu_pro_app_2.6.18.1-arm64.apk` | 18 780 060 B（17.91 MB） | `99F4EF854D4B1494B0010E602868744534CC86232B502F6F3891CDEF8FE81601` |
-| `yuedu_pro_app_2.6.18.1-armv7.apk` | 18 735 080 B（17.87 MB） | `2C0BBA73ABB333C1D7B6AECE7D2C889E927AC866DE6C16A0A651BF57F8B2B7C8` |
+| `yuedu_pro_app_2.6.18.2-arm64.apk` | 18 780 324 B（17.91 MB） | `DB2A1E2A274075F872E199FE9F50C262538873C49E1533A3A4792C4117784042` |
+| `yuedu_pro_app_2.6.18.2-armv7.apk` | 18 735 346 B（17.87 MB） | `F46BBC51660343F763E2408D0F341E59D3E5AA3E43415C306AA6FFAEC3EFB772` |
 
-- `aapt2 dump badging`：`package: name='io.legado.pro' versionCode='2061801' versionName='2.6.18.1'`，两个包均无 `application-debuggable`
-- 包内 `assets/updateLog.md` 首条已核对为 `**2026/11/17（2.6.18.1）**`（`python zipfile` 解包读取）
+- `aapt2 dump badging`：两包均为 `versionCode='2061802' versionName='2.6.18.2'`，无 `application-debuggable`
+- 包内 `assets/updateLog.md` 首条已用 Python zipfile 核对为 `**2026/11/17（2.6.18.2）**`
 - 签名沿用 `keystore/yuedu.jks`（v1 + v2），可直接覆盖安装旧版
 
 ### 安装方式
@@ -48,5 +45,7 @@ Legado（阅读）`3.23.110211` 编译，**minSdk 24 / targetSdk 33**（Android 
 
 ### 自测与限制
 
-- 编译：Gradle `-Xmx2048m` + Kotlin 守护进程 `-Xmx1536m` + `--max-workers=2`，arm64 2m40s / armv7 23s，exit 全 0
-- 未跑项：真机实派 cover/intro、构造 duplicate/stale、观察 highScore/lowScore，步骤见 `docs/app回传接受规范.md` §18.2
+- 编译：Gradle `-Xmx2048m` + Kotlin `-Xmx1536m` + `--max-workers=2`；arm64 **1m49s**、armv7 **37s**，exit 全 0
+- MuMu 模拟器：arm64 覆盖安装成功，`dumpsys` 显示 2061802 / 2.6.18.2；首启更新日志显示本版，
+  「我的 → 接入 FnReader 服务器」可打开，已连接 FnReader 2.6.18，导入书源 / 全部同步 / 打开网页等菜单正常
+- 本版未改代码，未重复执行全量书架同步；真机实派 cover/intro、构造 duplicate/stale 仍是既有 §18.2 待观察项

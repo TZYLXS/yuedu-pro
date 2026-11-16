@@ -478,3 +478,37 @@ return /(bus[-_]?debug|busmon|\bmonitor\b|\bmock\b|\bfake\b|\be2e\b|\bdebug\b)/i
 - [ ] 真机派 `cover` 任务确认只回 coverUrl、派 `intro` 确认回简介元数据（待真机/服务端实派）
 - [ ] 重复回传同一 id 得 `ok:"duplicate"`、锁过期后回传得 `ok:"stale"`（待真机构造）
 - [ ] 观察 `/api/bus` 的 `highScore`/`lowScore` 随设备成败变化（隐藏分本身不暴露，只看计数）
+
+## 19 2.6.18 后续文档补充（2026-11-17）：/api/bus 在线设备字段说明，客户端零改动
+
+- 上游提交区间 `ecf0408..c3922a3` 共 2 个提交：`6bfdbdc6`（docs: 增加工具调用约定）与
+  `c3922a35`（docs: 补充 /api/bus 在线设备字段说明与当前软总线设备快照）。
+- 变更文件仅 `AGENTS.md`（+11）与 `docs/软总线调试APK.md`（+29）；三份重点文档 blob 未变：
+  `APP同步接口.md` = `6b9b701f…`、`更新日志.md` = `84c99abc…`、`更新日志.txt` = `f1099dcb…`。
+- `AGENTS.md` 的 `ops_bash` 等约定只适用于上游执行环境，不是客户端接口或构建要求。
+
+### 19.1 `/api/bus` 字段与客户端影响（2.6.18.2）
+
+`GET /api/bus` 的 `devices[]` 字段如下，均为只读状态：
+
+| 字段 | 含义 |
+| --- | --- |
+| `id` / `name` / `model` / `version` | 设备 ID、名称、机型、客户端版本 |
+| `lastSeen` | 最近心跳时间（毫秒时间戳） |
+| `handled` | 累计处理任务数 |
+| `enabled` | 是否启用；服务端可用 `POST /api/bus/toggle` 暂停 |
+| `debug` / `online` | 是否调试设备、是否在线 |
+| `idle` | 距上次活动的空闲秒数 |
+
+顶层另有 `pending`（待领取任务数）、`recent`（最近任务流水）、`usage`（各任务类型计数）。
+两仓面板⑦本来就读取 `GET /api/bus`，本次只是字段说明与历史快照补充；`/api/m/*` 路径、字段、鉴权、任务类型和超时均未变，客户端代码零改动。
+
+文档校正：`cover` / `intro` 在两仓 `timeoutOf()` 中均无独立分支，实际使用 `JOB_TIMEOUT_DEFAULT = 20s`；
+`bookinfo` 独立分支仍为 9s。本版把 README 与接入文档中的 cover/intro 超时从误写的 9s 改为 20s，不修改代码。
+
+### 19.2 自测清单（2.6.18.2）
+
+- [x] compare 核对：`ecf0408...c3922a3` 共 2 提交、2 文件，不含 `remote.js` / `server.js`
+- [x] 三份重点文档 blob SHA 与 2.6.18 基线一致
+- [x] 两仓源码核对：cover/intro 均落 `JOB_TIMEOUT_DEFAULT`，文档已按 20s 校正，代码未改
+- [x] MuMu 安装本版：Pro / A4 首启均显示 2.6.18.2；Pro 面板可打开并连接 FnReader 2.6.18，菜单正常
