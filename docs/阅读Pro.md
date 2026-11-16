@@ -13,7 +13,7 @@ room 2.6.0 / okhttp 4.11.0 / compileSdk 34）在 JDK 17 上可稳定构建，且
 | `app/build.gradle` | `applicationId` → `io.legado.pro`（与官方版、API19 版共存） |
 | `app/build.gradle` | `minSdk 19 → 24`，`targetSdk 30 → 33` |
 | `app/build.gradle` | 新增 `-PtargetAbi=armv7/arm64` 开关，决定 `abiFilters` 与产物名后缀 |
-| `app/build.gradle` | `versionCode 19001 → 2060701`（当前 2.6.7.1），输出名 `${appName}_${flavor}_${version}${abiSuffix}.apk` |
+| `app/build.gradle` | `versionCode 19001 → 2060801`（当前 2.6.8.1），输出名 `${appName}_${flavor}_${version}${abiSuffix}.apk` |
 | `modules/book`、`modules/rhino1.7.3` | `minSdk 24`、`targetSdk 33`，与主模块一致 |
 | `res/values*/strings.xml` | `app_name` → 阅读Pro（含 zh / zh-HK / zh-TW 三个语言目录） |
 | `AndroidManifest.xml` | 删除 `<uses-sdk tools:overrideLibrary=...>`（三方库 minSdk 21 < 24，合并无需 override） |
@@ -74,6 +74,19 @@ DEX：6 个（`classes.dex` ~8.6MB、`classes2.dex` 仅 2.9KB、`classes3.dex` ~
 - **真机运行验证**：测试机 adb 掉线，未实测启动、搜索、阅读。接上 USB 后跑 `scripts/verify_device.bat`。
 - 应用内「检查更新」仍指向 Legado 官方仓库，换成本仓库的 Release 需要改 `AppUpdateService` 的地址。
 - 未做混淆/资源压缩（`minifyEnabled false`），体积偏大，后续可按需开启。
+
+## 2.6.8.1（versionCode 2060801）：仅跟进文档，无代码改动
+
+服务端 2.6.8 把监听从 `0.0.0.0` 换成 `::`（IPv4/IPv6 双栈）、设置页多展示一个公网 IPv6 地址；`docs/APP同步接口.md`
+零改动。本版只改包元数据与文档，Java 代码与 2.6.7.1 完全一致。
+
+- **2.6.8（本次跟进）**：`server.js` 改 `tcp.listen(PORT, '::')`，公网 IPv6 下手机可直接访问；`/api/m/info` 新增
+  `ipv6Lans`（只含 `2xxx` / `3xxx` 开头的公网 IPv6，跳过 ULA / link-local）；网页「其它地址」把 IPv6 一起列出并可复制
+- 新增 `docs/fnos-fpk-build.md`（fnOS FPK 打包与上架指南，纯文档，与客户端无关）
+- 契约复核：任务类型 `search` / `toc` / `content` / `rank` / `bookinfo`、超时 18 / 18 / 23 / 23 / 9 秒、
+  `X-Api-Token` 与传书 `X-Upload-Token`（现取）全部未变；`ipv6Lans` 是给网页读的，客户端 `info()` 只取版本号
+- 已知提示：面板里填 IPv6 字面量地址（`http://[240e:…]:1122`）会弹一次「这不是内网地址，请用 https」，
+  属既有 `isLanHost()` 行为，只提醒不拦截；公网访问本来按文档就该走 https
 
 ## 2.6.7.1（versionCode 2060701）：仅跟进文档，无代码改动
 
