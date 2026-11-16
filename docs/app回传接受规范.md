@@ -414,3 +414,30 @@ return /(bus[-_]?debug|busmon|\bmonitor\b|\bmock\b|\bfake\b|\be2e\b|\bdebug\b)/i
 - [ ] 真机把设备名改成含「监控」后 `pending` 返回 `debug:true`（当前无真机在线，待补跑）
 - [ ] 名称含「测试机」的设备回结果得 `ignored:true` 且任务留在队列（同上，待补跑）
 - [ ] 并发压测：同时派 4 条 search 到同源，观察是否被站点限流（待真机跑，Pro 6 条线程更明显）
+
+## 17 2.6.14 – 2.6.16（2026-11-17）：服务端路由与规则保护，客户端零改动
+
+- 上游提交区间 `737cd6e..b639ec2`，变更文件 5 个：`docs/更新日志.txt`、`legado-web/app/server/src/rules.js`、
+  `legado-web/app/server/src/server.js`、`legado-web/app/web/index.html`、`legado-web/manifest`；
+  **`remote.js` 未在其中**。
+- **2.6.14**：`preferRemote` 开启后，章节正文也优先走软总线（`remoteContent`，拿不到再回退本机 Python / Node）；
+  `/api/bus` 响应新增 `usage`（`phoneSearch` / `phoneToc` / `phoneContent` / `localToc` / `localContent`）。
+  客户端无需改动，只是会被更频繁地派 `content` 任务。
+- **2.6.15**：搜索顺序调整——`preferRemote` 时先问手机、再跑本机；正文提前到「本机无书源」之前尝试手机。
+  客户端无需改动：仍按 `pending` 领任务、按 `result` 回结果。
+- **2.6.16**：规则引擎递归保护，书源规则自我引用最多 200 层，超过返回 502「书源规则递归过深，已中止解析」。
+  客户端无需改动：该 502 产生在服务端解析链路，客户端看到的是任务失败/超时。
+- `/api/m/*`（含 `/api/m/remote/pending|result`）路径、字段、令牌、任务类型、超时全部未变。
+
+### 17.1 对客户端的影响评估（2.6.16.1）
+
+- 代码零改动，只升版本号与文档；2.6.13.1 的三条线程池设定与回传逻辑可直接对接 2.6.16 服务端。
+- 可观察项：`/api/bus` 的 `usage.phoneContent` 计数上升即说明 2.6.15 的「正文优先手机」已生效；客户端无需展示该字段。
+
+### 17.2 自测清单（2.6.16.1）
+
+- [x] 文档 SHA 核对：`APP同步接口.md` 33 802 B、`更新日志.md` 25 298 B 与上一版一致；`更新日志.txt` 40 728 → 41 867 B
+- [x] 变更文件核对：`737cd6e...b639ec2` 仅 5 个文件，`remote.js` 未在其中
+- [x] 联调核对：MuMu 实装 2.6.16.1 后连上服务端，显示「已连接 FnReader 2.6.15（保活中）」
+- [ ] 真机观察 `usage.phoneContent` 增长（服务端 2.6.15 已上线，待有书可解析时确认）
+- [ ] 递归保护 502 的客户端表现（构造自我引用书源，确认客户端按失败记录，待真机跑）

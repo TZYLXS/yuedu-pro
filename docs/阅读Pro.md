@@ -75,6 +75,23 @@ DEX：6 个（`classes.dex` ~8.6MB、`classes2.dex` 仅 2.9KB、`classes3.dex` ~
 - 应用内「检查更新」仍指向 Legado 官方仓库，换成本仓库的 Release 需要改 `AppUpdateService` 的地址。
 - 未做混淆/资源压缩（`minifyEnabled false`），体积偏大，后续可按需开启。
 
+## 2.6.16.1（versionCode 2061601）：仅跟进文档，无代码改动
+
+服务端 2.6.14 / 2.6.15 / 2.6.16 三版（`737cd6e..b639ec2`）全是服务端侧改动，客户端契约零变化：
+
+- **2.6.14**：开启「优先手机解析」后，章节正文也优先走软总线（手机在线先让手机解析，失败再回退本机）；
+  `/api/bus` 新增 `usage` 统计（`phoneSearch` / `phoneToc` / `phoneContent` / `localToc` / `localContent`）
+- **2.6.15**：修「开了手机代理仍优先本地」——搜索先问手机再跑本机 Python / Node，正文提前到「本机无书源」之前尝试手机
+- **2.6.16**：规则引擎加递归保护，书源规则自我引用最多 200 层，超过返回 502「书源规则递归过深，已中止解析」
+
+核对结果：`docs/APP同步接口.md`（33 802 B）与 `docs/更新日志.md`（25 298 B）本轮零改动；对比 `737cd6e...b639ec2`
+只有 `docs/更新日志.txt`、`legado-web/app/server/src/rules.js`、`server.js`、`web/index.html`、`manifest` 五个文件，
+**`remote.js` 未改** → `/api/m/remote/*` 与 `/api/m/*` 的路径、字段、令牌、任务类型、超时（18 / 18 / 23 / 23 / 9 秒）全部照旧。
+
+本版客户端代码零改动，只同步版本号、updateLog 与文档；包体仍是 2.6.13.1 的多线程实现
+（`parse` 自适应 6 / 4 / 3 / 2 条、`info` 2 / 1 条、`ebook` 1 条）。
+本机实测：MuMu 装包后「我的 → 接入 FnReader 服务器」显示「已连接 FnReader 2.6.15（保活中）」，菜单与同步项正常。
+
 ## 2.6.13.1（versionCode 2061301）：跟进 2.6.13 调试设备识别扩展
 
 服务端 2.6.13（`737cd6e`，2026-11-17 04:22）把 2.6.12 的调试设备判定放宽：ID 追加 `busmon` / `monitor` / `mock` / `fake` / `e2e`，
