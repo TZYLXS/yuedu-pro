@@ -121,7 +121,18 @@ object FnReaderAutoSync {
                     skipped++
                     continue
                 }
-                val book = Book(bookUrl = url, origin = s.optString("origin"), originName = s.optString("originName"))
+                val remoteOrigin = s.optString("origin")
+                val matched = if (remoteOrigin.isEmpty() || appDb.bookSourceDao.getBookSource(remoteOrigin) == null) {
+                    BookSourceResolver.resolve(url)
+                } else null
+                val origin = matched?.bookSourceUrl ?: remoteOrigin
+                if (origin.isEmpty()) {
+                    // 服务端历史上传过一批 origin 为空的「手机缓存」书，导入后必然打不开。
+                    // 本地也匹配不到书源时不再写入，避免把坏数据继续扩散到书架。
+                    skipped++
+                    continue
+                }
+                val book = Book(bookUrl = url, origin = origin, originName = matched?.bookSourceName ?: s.optString("originName"))
                 book.name = s.optString("name")
                 book.author = s.optString("author")
                 book.kind = s.optString("kind").ifEmpty { null }
