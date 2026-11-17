@@ -110,7 +110,7 @@ object ReadBook : CoroutineScope by MainScope() {
         if (book.isLocal) {
             bookSource = null
         } else {
-            appDb.bookSourceDao.getBookSource(book.origin)?.let {
+            BookSourceResolver.bind(book)?.let {
                 bookSource = it
                 if (book.getImageStyle().isNullOrBlank()) {
                     book.setImageStyle(it.getContentRule().imageStyle)
