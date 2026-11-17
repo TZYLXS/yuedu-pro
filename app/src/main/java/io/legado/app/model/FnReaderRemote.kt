@@ -485,16 +485,16 @@ object FnReaderRemote {
             author = payload.optString("author")
         }
         val result = WebBook.getChapterListAwait(bs, book)
-        val chapters = result.getOrThrow()
+        val chapters = FnReaderToc.normalize(result.getOrThrow())
         val array = JSONArray()
         chapters.forEachIndexed { index, chapter ->
             array.put(JSONObject().apply {
-                put("index", if (chapter.index > 0) chapter.index else index)
+                put("index", index)
                 put("title", chapter.title)
-                put("url", runCatching { chapter.getAbsoluteURL() }.getOrElse { chapter.url })
+                put("url", chapter.url)
             })
         }
-        return JSONObject().put("chapters", array)
+        return JSONObject().put("chapters", array).put("normalized", true)
     }
 
     private suspend fun content(payload: JSONObject): JSONObject {
