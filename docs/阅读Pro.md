@@ -13,7 +13,7 @@ room 2.6.0 / okhttp 4.11.0 / compileSdk 34）在 JDK 17 上可稳定构建，且
 | `app/build.gradle` | `applicationId` → `io.legado.pro`（与官方版、API19 版共存） |
 | `app/build.gradle` | `minSdk 19 → 24`，`targetSdk 30 → 33` |
 | `app/build.gradle` | 新增 `-PtargetAbi=armv7/arm64` 开关，决定 `abiFilters` 与产物名后缀 |
-| `app/build.gradle` | `versionCode 19001 → 3000801`（当前 3.0.8.1），输出名 `${appName}_${flavor}_${version}${abiSuffix}.apk` |
+| `app/build.gradle` | `versionCode 19001 → 3001001`（当前 3.0.10.1），输出名 `${appName}_${flavor}_${version}${abiSuffix}.apk` |
 | `modules/book`、`modules/rhino1.7.3` | `minSdk 24`、`targetSdk 33`，与主模块一致 |
 | `res/values*/strings.xml` | `app_name` → 阅读Pro（含 zh / zh-HK / zh-TW 三个语言目录） |
 | `AndroidManifest.xml` | 删除 `<uses-sdk tools:overrideLibrary=...>`（三方库 minSdk 21 < 24，合并无需 override） |
@@ -74,6 +74,16 @@ DEX：6 个（`classes.dex` ~8.6MB、`classes2.dex` 仅 2.9KB、`classes3.dex` ~
 - **真机运行验证**：测试机 adb 掉线，未实测启动、搜索、阅读。接上 USB 后跑 `scripts/verify_device.bat`。
 - 应用内「检查更新」仍指向 Legado 官方仓库，换成本仓库的 Release 需要改 `AppUpdateService` 的地址。
 - 未做混淆/资源压缩（`minifyEnabled false`），体积偏大，后续可按需开启。
+
+## 3.0.10.1（versionCode 3001001）：同步服务端 3.0.10，无客户端代码改动
+
+服务端从 `3.0.8` 连发到 `v3.0.10`（tag `255c51c`）。本版仅同步服务端版号，客户端代码零改动：
+
+- `3.0.9`：TXT 导出不再占用规则解析 Python 进程池，改用一次性独立进程；60s 硬超时，超过 4000 章直接 JS 拼装；stdin EPIPE 不再触发 uncaughtException
+- `3.0.10`：启动脚本依次探测 `nodejs_v22/v24/v20/v26` 与系统 node，逐个 `node -v` 校验，跳过缺 libatomic 等损坏运行时，日志记录实际 Node，修复全新安装启动失败
+- 以上均为服务端内部实现；`docs/APP同步接口.md` blob 仍为 `f4b8c9f957a1d609eb0a231123fadaa196ec5644`，`docs/软总线路由与权重.md`、`docs/AI构建指南.md` 也未变，`/api/m/*` 契约不变
+- 客户端回传、软总线、封面/书源/缓存通道沿用 3.0.2.1
+- 版本按「服务端版号 + 0.0.0.1」：`3.0.10` → `3.0.10.1` / `3001001`
 
 ## 3.0.8.1（versionCode 3000801）：同步服务端 3.0.8，无客户端代码改动
 
