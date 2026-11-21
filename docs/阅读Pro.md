@@ -13,7 +13,7 @@ room 2.6.0 / okhttp 4.11.0 / compileSdk 34）在 JDK 17 上可稳定构建，且
 | `app/build.gradle` | `applicationId` → `io.legado.pro`（与官方版、API19 版共存） |
 | `app/build.gradle` | `minSdk 19 → 24`，`targetSdk 30 → 33` |
 | `app/build.gradle` | 新增 `-PtargetAbi=armv7/arm64` 开关，决定 `abiFilters` 与产物名后缀 |
-| `app/build.gradle` | `versionCode 19001 → 2063001`（当前 2.6.30.1），输出名 `${appName}_${flavor}_${version}${abiSuffix}.apk` |
+| `app/build.gradle` | `versionCode 19001 → 3000201`（当前 3.0.2.1），输出名 `${appName}_${flavor}_${version}${abiSuffix}.apk` |
 | `modules/book`、`modules/rhino1.7.3` | `minSdk 24`、`targetSdk 33`，与主模块一致 |
 | `res/values*/strings.xml` | `app_name` → 阅读Pro（含 zh / zh-HK / zh-TW 三个语言目录） |
 | `AndroidManifest.xml` | 删除 `<uses-sdk tools:overrideLibrary=...>`（三方库 minSdk 21 < 24，合并无需 override） |
@@ -74,6 +74,22 @@ DEX：6 个（`classes.dex` ~8.6MB、`classes2.dex` 仅 2.9KB、`classes3.dex` ~
 - **真机运行验证**：测试机 adb 掉线，未实测启动、搜索、阅读。接上 USB 后跑 `scripts/verify_device.bat`。
 - 应用内「检查更新」仍指向 Legado 官方仓库，换成本仓库的 Release 需要改 `AppUpdateService` 的地址。
 - 未做混淆/资源压缩（`minifyEnabled false`），体积偏大，后续可按需开启。
+
+## 3.0.2.1（versionCode 3000201）：按 3.0.x 客户端适配清单补齐自动回传
+
+服务端已到 `3.0.2`，本版按 `3.0.x更新与客户端适配清单.md` 补齐 6 类回传里缺失的自动化能力：
+
+- **加书/改书自动回传**：`Book.save()` 落库后调用 `FnReaderAutoSync.scheduleBookPush()`，2 秒防抖后 `POST /api/m/books`；
+  未配置服务器或软总线未开启时内部直接跳过。
+- **阅读进度自动回传**：`ReadBook.saveRead()` 保存后调用 `scheduleProgressPush()`，3 秒防抖 `POST /api/m/progress`；
+  服务层每轮再按 `fnReaderProgressSyncedMs` 水位批量 `POST /api/m/progress/batch`，只推水位之后的变更。
+- **独立封面上传**：新增 `POST /api/m/cover`，JSON 为 `{bookUrl,mime,data:"data:image/...;base64,..."}`，
+  单张上限 8 MB；服务端返回 404 时写入 `fnReaderNoCoverApi=1` 并停止后续尝试。随 books 的 `coverData/coverUrl` 保留为兼容路径。
+- **书源双向同步补齐删除**：自动同步改为先读本机书源快照，本机删除的书源写入 `deleted` 数组；
+  `POST /api/m/sources/sync` 同时带 `updated` 与 `deleted`，成功后刷新快照；`lastUpdateTime<=0` 的旧书源自动补当前时间戳。
+- **自动补书**：服务端有、本机没有的继续拉取；本机有、服务端没有的书按书名归一化去重后回传，
+  同名不同源只计数跳过，避免把重复书推上去。
+- **版本号**：按「服务端版号 + 0.0.0.1」对齐为 `3.0.2.1` / versionCode `3000201`（仍高于旧版 `2063001`，可覆盖升级）。
 
 ## 2.6.30.1（versionCode 2063001）：软总线 2.6.19 / 上游 3.0.0 协议跟进
 

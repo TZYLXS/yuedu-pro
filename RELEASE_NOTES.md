@@ -1,40 +1,29 @@
-## 阅读Pro 2.6.18.2（versionCode 2061802）
+## 阅读Pro 3.0.2.1（versionCode 3000201）
 
 Legado（阅读）`3.23.110211` 编译，**minSdk 24 / targetSdk 33**（Android 7.0+），分 **arm64-v8a** 与 **armeabi-v7a** 两个产物。
 应用名「阅读Pro」，包名 `io.legado.pro`，可与官方版、安卓 4.0 版共存安装。
-与 **安卓 4.0 版（`io.legado.api19`）2.6.18.2** 同步发布、同一套版本号；版号基线取自服务端 `legado-web` **v2.6.18**。
+与 **安卓 4.0 版（`io.legado.api19`）3.0.2.1** 同步发布、同一套版本号；版号按服务端 FnReader **3.0.2 + 0.0.0.1** 对齐。
 
-### 本版仅跟进文档，无代码改动
+### 按 3.0.x 客户端适配清单补齐自动回传
 
-上游 `ecf0408..c3922a3` 有 2 个提交、2 个文件变化：
+本版不是只跟更新日志，而是按 `3.0.x更新与客户端适配清单.md` 补齐 6 类回传里缺失的自动化能力：
 
-- `6bfdbdc6`：`AGENTS.md` 新增上游环境专用的工具调用约定（+11），与安卓客户端接口无关
-- `c3922a35`：`docs/软总线调试APK.md` 新增 §6.3（+29），补充 `GET /api/bus` 在线设备字段与历史实测快照
-
-新增说明的 `devices[]` 字段为 `id`、`name`、`model`、`version`、`lastSeen`、`handled`、`enabled`、`debug`、`online`、`idle`，
-顶层另有 `pending`、`recent`、`usage`。这些都是面板⑦的只读信息，客户端现有 `GET /api/bus` 调用不需要修改。
-
-三份重点文档 blob 与 2.6.18 基线一致：`APP同步接口.md` = `6b9b701f…`、`更新日志.md` = `84c99abc…`、
-`更新日志.txt` = `f1099dcb…`；compare 不含 `remote.js` / `server.js`，所以 `/api/m/*` 路径、字段、鉴权、任务类型与超时均无变化。
-
-**文档口径校正**：`cover` / `intro` 在 `timeoutOf()` 中没有独立分支，当前实际使用 default **20 秒**；
-`bookinfo` 独立分支仍为 9 秒。本版只把 README 与接入文档中的 cover/intro 超时改为 20 秒，没有修改客户端代码。
-
-### 文档同步
-
-- `README.md`、`docs/阅读Pro.md`、`docs/飞牛书库接入.md` 更新到本版并补充 `/api/bus` 字段表
-- `docs/app回传接受规范.md` 新增 §19，本地正本与两仓 docs 三份副本 SHA256 一致
-- 应用内 `assets/updateLog.md` 顶部新增 `**2026/11/17（2.6.18.2）**`，旧段落保留
+- **加书/改书自动回传**：`Book.save()` 落库后调用 `FnReaderAutoSync.scheduleBookPush()`，2 秒防抖 `POST /api/m/books`；未配置服务器或软总线未开启时内部跳过。
+- **阅读进度自动回传**：`ReadBook.saveRead()` 保存后调用 `scheduleProgressPush()`，3 秒防抖 `POST /api/m/progress`；服务层每轮再按 `fnReaderProgressSyncedMs` 水位批量 `POST /api/m/progress/batch`。
+- **独立封面上传**：新增 `POST /api/m/cover`，JSON `{bookUrl,mime,data:"data:image/...;base64,..."}`，单张上限 8 MB；接口 404 时写入 `fnReaderNoCoverApi=1` 并停止后续尝试。随 books 的 `coverData/coverUrl` 保留为兼容路径。
+- **书源双向同步补齐删除**：自动同步先读本机书源快照，本机删除的书源写入 `deleted` 数组；`POST /api/m/sources/sync` 同时带 `updated` 与 `deleted`，成功后刷新快照；`lastUpdateTime<=0` 的旧书源自动补当前时间戳。
+- **自动补书**：服务端有、本机没有的继续拉取；本机有、服务端没有的书按书名归一化去重后回传，同名不同源只计数跳过。
+- **应用内更新兼容四段版本号**：`AppUpdateGitHub.versionCodeOf()` 增加四段解析，`v3.0.2.1` 正确换算为 `3000201`，避免新版 Release 被误判为旧版。
 
 ### 包信息
 
 | 产物 | 体积 | SHA256 |
 | --- | --- | --- |
-| `yuedu_pro_app_2.6.18.2-arm64.apk` | 18 780 324 B（17.91 MB） | `DB2A1E2A274075F872E199FE9F50C262538873C49E1533A3A4792C4117784042` |
-| `yuedu_pro_app_2.6.18.2-armv7.apk` | 18 735 346 B（17.87 MB） | `F46BBC51660343F763E2408D0F341E59D3E5AA3E43415C306AA6FFAEC3EFB772` |
+| `yuedu_pro_app_3.0.2.1-arm64.apk` | 18 795 693 B（17.92 MB） | `BEC04A474AEA2BA5A2C670A2E2C4B225115DCA2B754759ED5CC2EEAC325FC3D4` |
+| `yuedu_pro_app_3.0.2.1-armv7.apk` | 18 750 715 B（17.88 MB） | `AC9D5E6F9D6F60C5D34E051E0F17B3D7A239325DC75BA2DFCF43BA75B6F4D396` |
 
-- `aapt2 dump badging`：两包均为 `versionCode='2061802' versionName='2.6.18.2'`，无 `application-debuggable`
-- 包内 `assets/updateLog.md` 首条已用 Python zipfile 核对为 `**2026/11/17（2.6.18.2）**`
+- `aapt2 dump badging` 与 `apksigner verify` 结果见构建完成后的校验记录；两包均无 `application-debuggable`
+- 包内 `assets/updateLog.md` 首条为 `**2026/11/22（3.0.2.1）**`
 - 签名沿用 `keystore/yuedu.jks`（v1 + v2），可直接覆盖安装旧版
 
 ### 安装方式
@@ -43,9 +32,8 @@ Legado（阅读）`3.23.110211` 编译，**minSdk 24 / targetSdk 33**（Android 
 2. 覆盖安装即可升级，书源与书架数据保留
 3. 进入「我的 → 接入 FnReader 服务器」，填服务端地址与 `X-Api-Token`
 
-### 自测与限制
+### 说明
 
-- 编译：Gradle `-Xmx2048m` + Kotlin `-Xmx1536m` + `--max-workers=2`；arm64 **1m49s**、armv7 **37s**，exit 全 0
-- MuMu 模拟器：arm64 覆盖安装成功，`dumpsys` 显示 2061802 / 2.6.18.2；首启更新日志显示本版，
-  「我的 → 接入 FnReader 服务器」可打开，已连接 FnReader 2.6.18，导入书源 / 全部同步 / 打开网页等菜单正常
-- 本版未改代码，未重复执行全量书架同步；真机实派 cover/intro、构造 duplicate/stale 仍是既有 §18.2 待观察项
+- 自动回传依赖「接入 FnReader 服务器」已开启且地址 / token 有效；未开启时所有钩子直接返回，不产生后台请求。
+- 首次启用后，进度水位从 0 开始，会把已有阅读记录的书补推一遍；之后只推增量。
+- 封面接口只处理本机文件封面（PNG/JPEG/GIF/WebP），在线 `http(s)` 封面仍随 books 的 `coverUrl` 下发。

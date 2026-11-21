@@ -9,6 +9,7 @@ import io.legado.app.data.appDb
 import io.legado.app.help.book.*
 import io.legado.app.help.config.AppConfig
 import io.legado.app.help.config.ReadBookConfig
+import io.legado.app.model.FnReaderAutoSync
 import io.legado.app.model.ReadBook
 import io.legado.app.utils.GSON
 import io.legado.app.utils.MD5Utils
@@ -314,6 +315,8 @@ data class Book(
         } else {
             appDb.bookDao.insert(this)
         }
+        // 清单 §3：加书/改书后自动回传书架（2 秒防抖，服务器未配置时内部直接跳过）
+        FnReaderAutoSync.scheduleBookPush(this)
     }
 
     fun delete() {

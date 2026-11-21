@@ -527,6 +527,8 @@ object ReadBook : CoroutineScope by MainScope() {
                 }
             }
             appDb.bookDao.update(book)
+            // 清单 §4：翻页/退出/切后台保存进度后 3 秒防抖回传 FnReader
+            FnReaderAutoSync.scheduleProgressPush(book)
         }
     }
 

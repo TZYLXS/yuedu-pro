@@ -512,3 +512,33 @@ return /(bus[-_]?debug|busmon|\bmonitor\b|\bmock\b|\bfake\b|\be2e\b|\bdebug\b)/i
 - [x] 三份重点文档 blob SHA 与 2.6.18 基线一致
 - [x] 两仓源码核对：cover/intro 均落 `JOB_TIMEOUT_DEFAULT`，文档已按 20s 校正，代码未改
 - [x] MuMu 安装本版：Pro / A4 首启均显示 2.6.18.2；Pro 面板可打开并连接 FnReader 2.6.18，菜单正常
+
+## 20 3.0.x 客户端适配补齐（2026-11-22，3.0.2.1）
+
+服务端 `3.0.0 → 3.0.1 → 3.0.2` 引入完整的 6 类回传契约。客户端 `2.6.30.1` 已有手动回传，
+本版补齐自动化与遗漏项，接口均沿用 `X-Api-Token` 或 `?token=`：
+
+| 能力 | 接口 | 本版实现 |
+| --- | --- | --- |
+| 加书/改书 | `POST /api/m/books` | `Book.save()` 后 2 秒防抖，`FnReaderAutoSync.scheduleBookPush()` |
+| 单本进度 | `POST /api/m/progress` | `ReadBook.saveRead()` 后 3 秒防抖 |
+| 批量进度 | `POST /api/m/progress/batch` | 服务层每轮按 `fnReaderProgressSyncedMs` 水位只推增量 |
+| 封面上传 | `POST /api/m/cover` | 新增独立调用，JSON `{bookUrl,mime,data:"data:image/...;base64,..."}`，单张 8 MB；404 自动停用 |
+| 书源双向同步 | `POST /api/m/sources/sync` | 本机快照比较，本机删除写入 `deleted`；`lastUpdateTime<=0` 补当前时间戳 |
+| 缓存正文 | `POST /api/m/cache` | 沿用已有实现，全下完才传 |
+
+### 20.1 版本号口径
+
+按「服务端版号 + 0.0.0.1」对齐：服务端 `3.0.2` → 客户端 `3.0.2.1`，versionCode
+`3*1000000 + 0*10000 + 2*100 + 1 = 3000201`。`AppUpdateGitHub.versionCodeOf()` 同步支持四段 tag，
+否则 `v3.0.2.1` 会被误算为 `30002`，低于当前 versionCode，应用内检查更新失效。
+
+### 20.2 自测清单（3.0.2.1）
+
+- [x] 两仓 `compileAppReleaseKotlin` 通过，`GRADLE_EXIT=0`
+- [x] 三包 `aapt2 badging`：`versionCode='3000201' versionName='3.0.2.1'`，无 `application-debuggable`
+- [x] 三包 `apksigner`：v2 通过，证书 `CN=FnReader YueDu`
+- [x] 三包包内 `assets/updateLog.md` 首条为 `**2026/11/22（3.0.2.1）**`
+- [ ] 真机加书 / 翻页 / 切后台后观察服务端是否收到 books、progress、cover 请求
+- [ ] 真机删除一本书源，确认 `/sources/sync` 的 `deleted` 数组生效、服务端对应源被移除
+- [ ] 首次启用后确认进度水位从 0 推进，第二轮不再重复推旧记录

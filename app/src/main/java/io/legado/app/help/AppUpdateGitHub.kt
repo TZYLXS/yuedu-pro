@@ -62,16 +62,22 @@ object AppUpdateGitHub : AppUpdate.AppUpdateInterface {
 
     /**
      * 从 tag 里取出版本号，与 versionCode 同口径：
-     * v1.2 -> 1*10000 + 2*100 = 10200；v1.2.1 -> 10201；v1.3 -> 10300
+     * 三段：v1.2.1 -> 1*10000 + 2*100 + 1 = 10201；
+     * 四段：v3.0.2.1 -> 3*1000000 + 0*10000 + 2*100 + 1 = 3000201。
      */
     private fun versionCodeOf(tag: String): Long {
         val parts = tag.removePrefix("v").removePrefix("V").trim()
             .split(".").mapNotNull { it.toIntOrNull() }
         if (parts.isEmpty()) return 0L
-        val major = parts.getOrElse(0) { 0 }
-        val minor = parts.getOrElse(1) { 0 }
-        val patch = parts.getOrElse(2) { 0 }
-        return major.toLong() * 10000 + minor.toLong() * 100 + patch.toLong()
+        val a = parts.getOrElse(0) { 0 }
+        val b = parts.getOrElse(1) { 0 }
+        val c = parts.getOrElse(2) { 0 }
+        val d = parts.getOrElse(3) { 0 }
+        return if (parts.size >= 4) {
+            a.toLong() * 1_000_000 + b.toLong() * 10_000 + c.toLong() * 100 + d.toLong()
+        } else {
+            a.toLong() * 10_000 + b.toLong() * 100 + c.toLong()
+        }
     }
 
     /**
