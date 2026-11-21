@@ -542,3 +542,15 @@ return /(bus[-_]?debug|busmon|\bmonitor\b|\bmock\b|\bfake\b|\be2e\b|\bdebug\b)/i
 - [ ] 真机加书 / 翻页 / 切后台后观察服务端是否收到 books、progress、cover 请求
 - [ ] 真机删除一本书源，确认 `/sources/sync` 的 `deleted` 数组生效、服务端对应源被移除
 - [ ] 首次启用后确认进度水位从 0 推进，第二轮不再重复推旧记录
+
+## 21 服务端 3.0.8 版号同步（2026-11-22，3.0.8.1）
+
+服务端 `3.0.3 → 3.0.8` 只有 Web UI、书城补全、TXT 导出、引擎启动等内部实现更新，
+`docs/APP同步接口.md` blob 仍为 `f4b8c9f957a1d609eb0a231123fadaa196ec5644`，
+`/api/m/*` 路径、字段、鉴权、超时均未变化，客户端无需改代码。
+
+- 版本号按「服务端版号 + 0.0.0.1」：服务端 `3.0.8` → 客户端 `3.0.8.1`，versionCode `3000801`
+- 三包 `aapt2 badging` 均为 `versionCode='3000801' versionName='3.0.8.1'`，无 `application-debuggable`
+- 三包 `apksigner`：Pro v2 true（minSdk 24 下 v1 false 正常），A4 v1/v2 均 true，证书 `CN=FnReader YueDu`
+- 三包包内 `assets/updateLog.md` 首条为 `**2026/11/22（3.0.8.1）**`
+- 本版无客户端代码改动，未重复执行真机 6 类回传验证
