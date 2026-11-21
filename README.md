@@ -14,8 +14,8 @@
 
 | 产物 | 适用设备 | 说明 |
 | --- | --- | --- |
-| `yuedu_pro_app_2.6.18.2-arm64.apk` | 2017 年后的手机 / 平板 / 电视盒子（绝大多数） | arm64-v8a，64 位原生库 |
-| `yuedu_pro_app_2.6.18.2-armv7.apk` | 老一些的 32 位设备、部分低端盒子 | armeabi-v7a，兼容性优先 |
+| `yuedu_pro_app_2.6.30.1-arm64.apk` | 2017 年后的手机 / 平板 / 电视盒子（绝大多数） | arm64-v8a，64 位原生库 |
+| `yuedu_pro_app_2.6.30.1-armv7.apk` | 老一些的 32 位设备、部分低端盒子 | armeabi-v7a，兼容性优先 |
 
 不确定选哪个：先装 arm64，闪退或提示「应用未安装」再换 armv7。
 两者 Java 侧完全一致，只差 APK 里打包的原生库（.so）。
@@ -28,7 +28,7 @@
 | --- | --- |
 | 包名 / 应用名 | `io.legado.pro` / 阅读Pro |
 | minSdk / targetSdk | 24 / 33 |
-| versionCode | 2061802（2.6.18.2） |
+| versionCode | 2063001（2.6.30.1） |
 | 签名 | v1 (JAR) + v2 都在包里。`jarsigner -verify` 对 v1 报「jar 已验证」；`apksigner` 在 minSdk ≥ 24 时只校验 v2，会把 v1 显示成 false |
 | 依赖底座 | Legado `3.23.110211` |
 
@@ -80,6 +80,10 @@
     重算在途数修掉设备卡死。客户端 2.6.18.1 已支持拆分任务 `cover`（只回封面）/ `intro`（回简介与元数据），`submit()` 识别 duplicate/stale 不重试。
 19. **软总线设备字段说明**（2.6.18.2，仅跟进文档）：上游补充 `/api/bus` 的 `id/name/model/version/lastSeen/handled/enabled/debug/online/idle`
     与 `pending/recent/usage` 只读字段及调试快照；三份重点文档 SHA 未变，`/api/m/*` 契约零变化，客户端代码未改。
+20. **软总线按类额度 / 超时建模**（2.6.19 / 上游 3.0.0）：`pending` 下发 `timeoutMs` / `serverTime`，
+    服务端按任务类（book 20s / content 25s / media 8s / ebook 30s）与设备实测建模；客户端领任务时上报
+    `cores` / `mem` / `inflight` / `supports`，服务端据此算能力初值分（40–78）并按类切额度。本端已按
+    `timeoutMs - 500ms` 收手（封面/简介 7s、bookinfo 9s、默认 20s），老服务端没下发时自动回落。
 
 ### lean LEDE 更新日志与许愿（1.11 引入，仍在）
 
@@ -182,7 +186,7 @@
 | targetSdk | 33 | 30 |
 | 4.4 兼容补丁 | 保留但不再触发（TLS1.2 兜底、TTS 三参、PFD 回退等） | 全局生效 |
 
-两者可以同时装在一台设备上，书源与书架各自独立。两仓共用版本号（当前 2.6.18.2 / 2061802）。
+两者可以同时装在一台设备上，书源与书架各自独立。两仓共用版本号（当前 2.6.30.1 / 2063001）。
 
 ## 构建
 

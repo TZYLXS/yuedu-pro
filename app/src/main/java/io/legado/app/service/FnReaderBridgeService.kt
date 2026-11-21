@@ -52,6 +52,12 @@ class FnReaderBridgeService : BaseService() {
          * 手机这边必须比它早放手，否则飞牛早就按原样返回了，我们还在啃一个啃不动的详情页。
          */
         private const val JOB_TIMEOUT_BOOKINFO = 9000L
+        /**
+         * 封面 / 简介（cover、intro）服务端只等 8 秒（remoteMedia 的 timeout=8000），
+         * 2.6.18.2 之前这里没有分支，落到 default 20 秒 —— 手机白啃 12 秒，
+         * 飞牛那边早就按原样返回了。2.6.19 起给它们独立预算。
+         */
+        private const val JOB_TIMEOUT_MEDIA = 7000L
         private const val JOB_TIMEOUT_DEFAULT = 20000L
 
         /** 电子书解析可能要几分钟，但不能超过服务端的 10 分钟 TTL */
@@ -105,9 +111,24 @@ class FnReaderBridgeService : BaseService() {
             "content" -> JOB_TIMEOUT_CONTENT
             "rank" -> JOB_TIMEOUT_CONTENT
             "bookinfo" -> JOB_TIMEOUT_BOOKINFO
+            "cover", "intro" -> JOB_TIMEOUT_MEDIA
             "ebook-parse" -> EBOOK_TIMEOUT
             "ebook-chapter" -> EBOOK_CHAPTER_TIMEOUT
             else -> JOB_TIMEOUT_DEFAULT
+        }
+
+        /**
+         * 最终执行预算：服务端按「设备实测 + 任务类」建模下发的值优先（2.6.19 起），
+         * 没下发（0）才回落到本地经验值；本地值再兜一层硬上限，避免 ebook 这类被误裁。
+         */
+        private fun budgetOf(job: FnReaderRemote.Job): Long {
+            val server = job.timeoutMs
+            if (server > 0) {
+                val margin = 500L // 留出回传与网络的时间，别和服务端同时到点
+                val hardCap = maxOf(timeoutOf(job.type), server)
+                return minOf(hardCap, maxOf(3000L, server - margin))
+            }
+            return timeoutOf(job.type)
         }
     }
 
@@ -120,6 +141,21 @@ class FnReaderBridgeService : BaseService() {
         if (maker.isEmpty() || model.startsWith(maker, true)) model else "$maker $model"
     }
     private val appVersion: String by lazy { AppConst.appInfo.versionName }
+
+    /**
+     * 能力上报（2.6.19）：核数 / 最大堆 / 本地并发 / 支持的任务类型。
+     * 服务端用它给初值分并按任务类切分额度，代替「所有新设备一律 50 分」的盲配。
+     */
+    private val capsCores: Int by lazy { cpuCores }
+    private val capsMemMb: Int by lazy { (Runtime.getRuntime().maxMemory() / (1024 * 1024)).toInt() }
+    private val capsInflight: Int by lazy { searchConcurrency + tocConcurrency + infoConcurrency }
+    private val capsSupports: List<String> by lazy {
+        listOf(
+            "search", "toc", "content", "rank",
+            "bookinfo", "cover", "intro",
+            "ebook-parse", "ebook-chapter"
+        )
+    }
 
     private var loopJob: Job? = null
 
@@ -291,7 +327,11 @@ class FnReaderBridgeService : BaseService() {
                         deviceId = deviceId,
                         deviceName = deviceName,
                         deviceModel = deviceModel,
-                        appVer = appVersion
+                        appVer = appVersion,
+                        cores = capsCores,
+                        memMb = capsMemMb,
+                        maxInflight = capsInflight,
+                        supports = capsSupports
                     )
                 } catch (e: Exception) {
                     val msg = FnReaderRemote.describeError(e)
@@ -348,7 +388,7 @@ class FnReaderBridgeService : BaseService() {
     ) {
         notificationContent = "正在解析：${job.type}"
         upNotification()
-        val timeout = timeoutOf(job.type)
+        val timeout = budgetOf(job)
         val timeoutMessage = "解析超时（${timeout / 1000} 秒没出结果），这个书源本机也跑不动"
         val result = runCatching {
             withTimeoutOrNull(timeout) { FnReaderRemote.execute(job) }

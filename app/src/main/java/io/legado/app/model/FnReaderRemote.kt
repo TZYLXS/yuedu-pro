@@ -38,7 +38,9 @@ object FnReaderRemote {
         val id: String,
         val type: String,
         val payload: JSONObject,
-        val age: Long
+        val age: Long,
+        /** 服务端按「设备实测 + 任务类」建模后下发的执行预算（毫秒）；0 表示老服务端没给 */
+        val timeoutMs: Long = 0L
     )
 
     /**
@@ -66,6 +68,8 @@ object FnReaderRemote {
      *
      * 1.8.0 起带上 id / name / model / ver，服务端会自动把本机登记成
      * 「软总线」里的解析设备（网页 设置 → 软总线 能看到它、也能单独暂停它）。
+     * 2.6.19 起再带上能力上报（cores / mem / inflight / supports）：
+     * 服务端据此给初值分并按任务类切分额度，不再把所有新设备当 50 分处理。
      */
     suspend fun poll(
         base: String,
@@ -75,13 +79,23 @@ object FnReaderRemote {
         deviceId: String = "",
         deviceName: String = "",
         deviceModel: String = "",
-        appVer: String = ""
+        appVer: String = "",
+        cores: Int = 0,
+        memMb: Int = 0,
+        maxInflight: Int = 0,
+        supports: List<String> = emptyList()
     ): Pending = withContext(Dispatchers.IO) {
         val query = StringBuilder("?wait=$waitMs&limit=$limit")
         if (deviceId.isNotEmpty()) query.append("&id=").append(Uri.encode(deviceId))
         if (deviceName.isNotEmpty()) query.append("&name=").append(Uri.encode(deviceName))
         if (deviceModel.isNotEmpty()) query.append("&model=").append(Uri.encode(deviceModel))
         if (appVer.isNotEmpty()) query.append("&ver=").append(Uri.encode(appVer))
+        if (cores > 0) query.append("&cores=").append(cores)
+        if (memMb > 0) query.append("&mem=").append(memMb)
+        if (maxInflight > 0) query.append("&inflight=").append(maxInflight)
+        if (supports.isNotEmpty()) {
+            query.append("&supports=").append(Uri.encode(supports.joinToString(",")))
+        }
         val url = "$base/api/m/remote/pending$query"
         val (code, body) = request("GET", url, token, null, waitMs + 15000)
         if (code !in 200..299) throw RemoteException(explain(code, body))
@@ -95,7 +109,8 @@ object FnReaderRemote {
                     id = it.optString("id"),
                     type = it.optString("type"),
                     payload = it.optJSONObject("payload") ?: JSONObject(),
-                    age = it.optLong("age")
+                    age = it.optLong("age"),
+                    timeoutMs = it.optLong("timeoutMs", 0L)
                 )
             }
         }.filter { it.id.isNotEmpty() && it.type.isNotEmpty() }

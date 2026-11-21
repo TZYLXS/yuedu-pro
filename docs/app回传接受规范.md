@@ -127,7 +127,7 @@ Content-Type: image/png
 响应：
 
 ```json
-{ "ok": true, "coverUrl": "http://192.168.5.114:1122/api/covers/5c1490be35afe31c.png",
+{ "ok": true, "coverUrl": "http://IP:1122/api/covers/5c1490be35afe31c.png",
   "size": 70, "book": true }
 ```
 
