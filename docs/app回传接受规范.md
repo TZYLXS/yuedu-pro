@@ -1,7 +1,7 @@
 # APP 回传接受规范
 
-> 服务端依据：FnReader `3.1.4`（`docs/APP同步接口.md` 第 4 / 9 / 11 / 13 / 14 / 15 / 16 / 17 章）
-> 客户端：阅读Pro `3.1.4.1`（`io.legado.pro`）、安卓4.0 版 `3.1.4.1`（`io.legado.api19`）
+> 服务端依据：FnReader `3.2.0`（`docs/APP同步接口.md` 第 4 / 8.3.2 / 9 / 11 / 13 / 14 / 15 / 16 / 17 章）
+> 客户端：阅读Pro `3.2.0.1`（`io.legado.pro`）、安卓4.0 版 `3.2.0.1`（`io.legado.api19`）
 > 本文写的是**服务端接收侧**的规矩：APP 往飞牛回传什么、字段怎么填、什么会被拒、什么会被合并。
 
 ## 0 通用约定
@@ -579,3 +579,15 @@ return /(bus[-_]?debug|busmon|\bmonitor\b|\bmock\b|\bfake\b|\be2e\b|\bdebug\b)/i
 - 客户端代码改动仅 `FnReaderAutoSync.kt` 的 404 退避逻辑；A4 保留自有 URL/菜单差异
 - 三包 `aapt2 badging` 应为 `versionCode='3010401' versionName='3.1.4.1'`，无 `application-debuggable`；`apksigner` 继续使用 `CN=FnReader YueDu` 正式证书
 - 本地构建与 MuMu 安装启动验证通过；服务端契约未变，未新增回传字段
+## 24 服务端 3.2.0 与客户端 3.2.0.1（2026-11-23）
+
+服务端 `3.1.4 → v3.2.0`（tag/main `4392041`）。`docs/APP同步接口.md` 仅新增「多客户端 / 多书源并发合并（0.1.25+）」说明：同书按 `workId` 归并、章节取并集、同章不同正文保留 `variants`、`raw/<srcHash>/` 分开存放，响应字段 `sources / added / merged / duplicates / splitMismatch` 沿用现有契约；`docs/软总线路由与权重.md`、`docs/AI构建指南.md` 在 v3.2.0 未变化，`/api/m/*` 无新增客户端必填字段。
+
+服务端 3.2.0 主要变更：同书多客户端/多书源缓存合并，8 源并发不分裂；新增「书籍」页与本地 `.nb` 缓存清单（每本显示缓存章数、同步章数、来源数、变体数）；设置页按功能重排、IPv6 地址独立成行、书源导入链接改明码并修复缺斜杠；增量哈希、导出流式写、Python 池扩到核数，修复阅读接入详情 404。
+
+客户端本版：FnReader 同步通知分道、同步记录页、空书源过滤；FnReader 配置菜单改分组列表，IP/TOKEN 整行弹输入框，手机解析待命/TOC/TRE 改滑动开关，每个点击事件独立一行，同步书架/立即同步/测试连接/传书点击弹进度框；A4 修复 E-Ink 优化创建空 `ScrollCache` 导致 `ScrollBarDrawable.mutate()` 启动崩溃。
+
+- 版本号按「服务端版号 + 0.0.0.1」：服务端 `3.2.0` → 客户端 `3.2.0.1`，versionCode `3200001`
+- 三包 `aapt2 badging` 应为 `versionCode='3200001' versionName='3.2.0.1'`，无 `application-debuggable`；`apksigner` 继续使用 `CN=FnReader YueDu` 正式证书
+- 三包包内 `assets/updateLog.md` 首条应为 `**2026/11/23（3.2.0.1）**`
+- debug 包 MuMu 已验证：菜单打开/输入框/开关/进度框、A4 启动、阅读页、书籍详情滚动均正常
