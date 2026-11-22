@@ -183,6 +183,11 @@
         <activity
             android:name=".ui.config.ConfigActivity"
             android:launchMode="singleTask" />
+        <!-- FnReader 同步记录（通知点击进入） -->
+        <activity
+            android:name=".ui.config.FnReaderSyncLogActivity"
+            android:launchMode="singleTop"
+            android:exported="false" />
         <!-- 搜索界面 -->
         <activity
             android:name=".ui.book.search.SearchActivity"

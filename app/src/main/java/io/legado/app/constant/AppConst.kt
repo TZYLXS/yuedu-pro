@@ -17,6 +17,9 @@ object AppConst {
     const val channelIdReadAloud = "channel_read_aloud"
     const val channelIdWeb = "channel_web"
 
+    /** FnReader 书源同步结果独立通知通道，不和前台「手机解析」常驻通知共用 */
+    const val channelIdFnReaderSync = "channel_fnreader_sync"
+
     const val UA_NAME = "User-Agent"
 
     const val MAX_THREAD = 9

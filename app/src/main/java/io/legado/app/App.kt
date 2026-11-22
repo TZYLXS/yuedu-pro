@@ -13,6 +13,7 @@ import com.github.liuyueyi.quick.transfer.constants.TransType
 import com.jeremyliao.liveeventbus.LiveEventBus
 import io.legado.app.base.AppContextWrapper
 import io.legado.app.constant.AppConst.channelIdDownload
+import io.legado.app.constant.AppConst.channelIdFnReaderSync
 import io.legado.app.constant.AppConst.channelIdReadAloud
 import io.legado.app.constant.AppConst.channelIdWeb
 import io.legado.app.constant.PreferKey
@@ -163,12 +164,26 @@ class App : MultiDexApplication() {
             importance = NotificationManager.IMPORTANCE_LOW
         }
 
+        // 书源同步结果独立通道：IMPORTANCE_DEFAULT，用户可在系统里单独关闭，
+        // 不会被「FnReader 手机解析」的 LOW 前台常驻通知覆盖。
+        val fnReaderSyncChannel = NotificationChannel(
+            channelIdFnReaderSync,
+            "FnReader 同步结果",
+            NotificationManager.IMPORTANCE_DEFAULT
+        ).apply {
+            description = "书源首次合并、增量上传/下载/删除的结果"
+            enableLights(false)
+            enableVibration(false)
+            setSound(null, null)
+        }
+
         //向notification manager 提交channel
         notificationManager.createNotificationChannels(
             listOf(
                 downloadChannel,
                 readAloudChannel,
-                webChannel
+                webChannel,
+                fnReaderSyncChannel
             )
         )
     }

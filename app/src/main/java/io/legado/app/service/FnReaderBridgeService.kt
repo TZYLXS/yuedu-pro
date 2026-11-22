@@ -3,6 +3,7 @@ package io.legado.app.service
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
@@ -310,12 +311,11 @@ class FnReaderBridgeService : BaseService() {
                 if (System.currentTimeMillis() - lastAutoSyncAt > AUTO_SYNC_INTERVAL) {
                     lastAutoSyncAt = System.currentTimeMillis()
                     launch {
-                        val r = runCatching { FnReaderAutoSync.run(base, token) }.getOrNull()
-                        val summary = r?.summary().orEmpty()
-                        if (summary.isNotEmpty()) {
-                            notificationContent = summary
-                            upNotification()
-                        }
+                        // 同步结果由 FnReaderAutoSync 自己发独立通知 + 写记录页；
+                        // 这里只把常驻通知恢复成「待命中」，不再覆盖成同步摘要。
+                        runCatching { FnReaderAutoSync.run(base, token) }
+                        notificationContent = onlineText.ifEmpty { "已连接　待命中" }
+                        upNotification()
                     }
                 }
                 val pending = try {
@@ -358,6 +358,13 @@ class FnReaderBridgeService : BaseService() {
                 // 任务按类型分进两条队列：bookinfo（简介/封面）走独立队列，
                 // 不和搜索抢并发；其余统一进检索队列，由 2 个工作者轮流跑。
                 for (job in jobs) {
+                    // T3：软总线任务没有书源地址时直接跳过，不入队、不回传失败。
+                    if (job.type != "ebook-parse" && job.type != "ebook-chapter" &&
+                        job.payload.optString("source").isBlank()
+                    ) {
+                        Log.d("FnReaderBridgeService", "skipped empty source: ${job.type}/${job.id}")
+                        continue
+                    }
                     val item = QueuedJob(base, token, job, onlineText)
                     when (job.type) {
                         // media 类（bookinfo 及 2.6.17 拆分出的 cover/intro）统一走简介队列，
@@ -393,6 +400,13 @@ class FnReaderBridgeService : BaseService() {
         val result = runCatching {
             withTimeoutOrNull(timeout) { FnReaderRemote.execute(job) }
                 ?: throw FnReaderRemote.RemoteException(timeoutMessage)
+        }
+        // T3：空书源地址的兜底，跳过且不 submit，不刷「解析失败」通知
+        if (result.exceptionOrNull() is FnReaderRemote.SkipJobException) {
+            Log.d("FnReaderBridgeService", "skipped empty source: ${job.type}/${job.id}")
+            notificationContent = onlineText.ifEmpty { "已连接　待命中" }
+            upNotification()
+            return
         }
         val ok = result.isSuccess
         val error = result.exceptionOrNull()?.let { FnReaderRemote.describeError(it) } ?: "解析失败"

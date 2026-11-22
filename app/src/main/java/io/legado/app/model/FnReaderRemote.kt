@@ -1,6 +1,7 @@
 package io.legado.app.model
 
 import android.net.Uri
+import android.util.Log
 import io.legado.app.data.appDb
 import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookChapter
@@ -33,6 +34,9 @@ import java.net.URLEncoder
 object FnReaderRemote {
 
     class RemoteException(message: String) : Exception(message)
+
+    /** 任务缺少书源地址：直接跳过，不向服务端回传失败，避免刷「解析失败」通知 */
+    class SkipJobException(message: String) : Exception(message)
 
     data class Job(
         val id: String,
@@ -413,7 +417,10 @@ object FnReaderRemote {
     // ---------------- 三种任务 ----------------
 
     private fun source(sourceUrl: String): BookSource {
-        if (sourceUrl.isEmpty()) throw RemoteException("任务里没有书源地址")
+        if (sourceUrl.isBlank()) {
+            Log.d("FnReaderRemote", "skipped empty source")
+            throw SkipJobException("任务里没有书源地址")
+        }
         appDb.bookSourceDao.getBookSource(sourceUrl)?.let { return it }
         // 飞牛库里存的地址和本机可能差个结尾斜杠 / http(s)，按归一化再找一遍
         val key = normalizeUrl(sourceUrl)

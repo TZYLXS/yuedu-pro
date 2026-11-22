@@ -1,6 +1,7 @@
 package io.legado.app.model
 
 import android.util.Base64
+import android.util.Log
 import io.legado.app.data.appDb
 import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookSource
@@ -35,11 +36,35 @@ object FnReaderAutoSync {
         val sources: String = "",
         val cache: String = "",
         val shelf: String = "",
-        val skipped: Boolean = false
+        val skipped: Boolean = false,
+        val uploaded: Int = 0,
+        val pulled: Int = 0,
+        val deleted: Int = 0,
+        val total: Int = 0,
+        val durationMs: Long = 0L,
+        val error: String = "",
+        val note: String = ""
     ) {
         fun summary(): String =
             listOf(shelf, sources, cache).filter { it.isNotEmpty() }.joinToString("　")
+
+        fun countText(): String =
+            "上传 $uploaded　下载 $pulled　删除 $deleted　飞牛总数 $total"
+
+        fun shouldNotify(): Boolean =
+            uploaded > 0 || pulled > 0 || deleted > 0 || error.isNotEmpty() || note.isNotEmpty()
     }
+
+    /** 书源同步的计数，供结果通知与同步记录复用 */
+    private data class SourceStats(
+        val text: String = "",
+        val uploaded: Int = 0,
+        val pulled: Int = 0,
+        val deleted: Int = 0,
+        val total: Int = 0,
+        val error: String = "",
+        val firstSync: Boolean = false
+    )
 
     /** 服务端确认没有对应接口就别再每轮重试，记住这个结论 */
     private const val KEY_NO_SOURCE_SYNC = "fnReaderNoSourceSync"
@@ -59,11 +84,40 @@ object FnReaderAutoSync {
     private var progressPushJob: Coroutine<Unit>? = null
 
     suspend fun run(base: String, token: String): Result = withContext(Dispatchers.IO) {
+        val startedAt = System.currentTimeMillis()
         val (shelf, shelfBody) = runShelf(base, token)
         val push = runPush(base, token, shelfBody)
-        val sources = runSources(base, token)
+        val sourceStats = runSources(base, token)
         val cache = runCache(base, token)
-        Result(sources, cache, listOf(shelf, push).filter { it.isNotEmpty() }.joinToString("　"))
+        val result = Result(
+            sources = sourceStats.text,
+            cache = cache,
+            shelf = listOf(shelf, push).filter { it.isNotEmpty() }.joinToString("　"),
+            uploaded = sourceStats.uploaded,
+            pulled = sourceStats.pulled,
+            deleted = sourceStats.deleted,
+            total = sourceStats.total,
+            durationMs = System.currentTimeMillis() - startedAt,
+            error = sourceStats.error,
+            note = if (sourceStats.firstSync) "首次同步" else ""
+        )
+        FnReaderSyncLog.add(
+            FnReaderSyncLog.Entry(
+                at = startedAt,
+                uploaded = result.uploaded,
+                pulled = result.pulled,
+                deleted = result.deleted,
+                total = result.total,
+                durationMs = result.durationMs,
+                error = result.error,
+                note = result.note
+            )
+        )
+        // 没有变化时不弹结果通知（每 5 分钟一轮，避免刷屏）；首次同步/有增量/失败必弹。
+        if (result.shouldNotify()) {
+            FnReaderSyncNotifier.notify(result)
+        }
+        result
     }
 
     // ---------------- ③ 书架合并：同名只留一本（优先有 .nb 缓存的） ----------------
@@ -510,12 +564,18 @@ object FnReaderAutoSync {
 
     // ---------------- ⑨ 书源双向同步 ----------------
 
-    private suspend fun runSources(base: String, token: String): String {
+    private suspend fun runSources(base: String, token: String): SourceStats {
         // 404 只跳过 6 小时：旧版服务端/临时 404 不能让书源同步永久失效
         val skipUntil = appCtx.getPrefString(KEY_NO_SOURCE_SYNC, "0")?.toLongOrNull() ?: 0L
-        if (skipUntil > System.currentTimeMillis()) return ""
+        if (skipUntil > System.currentTimeMillis()) return SourceStats()
         val since = appCtx.getPrefString(FnReaderConfigDialog.KEY_SOURCES_SINCE, "0")?.toLongOrNull() ?: 0L
-        val parts = appDb.bookSourceDao.flowAll().first()
+        val rawParts = appDb.bookSourceDao.flowAll().first()
+        // T3：本地书源里空 / 空白 URL 不参与同步，避免把空源推到服务端
+        val parts = rawParts.filter { it.bookSourceUrl.isNotBlank() }
+        val skippedEmpty = rawParts.size - parts.size
+        if (skippedEmpty > 0) {
+            Log.d("FnReaderAutoSync", "skipped empty=$skippedEmpty")
+        }
         val currentUrls = parts.map { normSourceUrl(it.bookSourceUrl) }.toHashSet()
         return try {
             val text = if (since <= 0L) {
@@ -529,21 +589,24 @@ object FnReaderAutoSync {
             val msg = FnReaderRemote.describeError(e)
             if (msg.contains("404")) {
                 appCtx.putPrefString(KEY_NO_SOURCE_SYNC, (System.currentTimeMillis() + 6 * 3600 * 1000L).toString())
-                "书源同步：服务端没有这个接口，6 小时后重试"
+                SourceStats(
+                    text = "书源同步：服务端没有这个接口，6 小时后重试",
+                    error = "服务端没有这个接口"
+                )
             } else {
-                "书源同步失败：$msg"
+                SourceStats(text = "书源同步失败：$msg", error = msg)
             }
         }
     }
 
     /** 首次接入：按 bookSourceUrl 合并上传（POST /api/m/sources），再取一次 serverTime 当 since */
-    private suspend fun firstSync(base: String, token: String, currentUrls: Set<String>): String {
-        val parts = appDb.bookSourceDao.flowAll().first()
+    private suspend fun firstSync(base: String, token: String, currentUrls: Set<String>): SourceStats {
+        val parts = appDb.bookSourceDao.flowAll().first().filter { it.bookSourceUrl.isNotBlank() }
         val all = ArrayList<BookSource>()
         parts.forEach { p ->
             appDb.bookSourceDao.getBookSource(p.bookSourceUrl)?.let { all.add(it) }
         }
-        if (all.isEmpty()) return ""
+        if (all.isEmpty()) return SourceStats(firstSync = true)
         val body = JSONArray().also { arr ->
             all.forEach { arr.put(sourceJson(it)) }
         }.toString()
@@ -555,15 +618,22 @@ object FnReaderAutoSync {
             "$base/api/m/sources/sync?since=${System.currentTimeMillis()}",
             token
         )
-        val serverTime = if (stamp.first in 200..299) {
-            runCatching { JSONObject(stamp.second).optLong("serverTime") }.getOrDefault(0L)
-        } else 0L
+        val stampObj = if (stamp.first in 200..299) {
+            runCatching { JSONObject(stamp.second) }.getOrNull()
+        } else null
+        val serverTime = stampObj?.optLong("serverTime") ?: 0L
+        val total = stampObj?.optInt("total") ?: 0
         appCtx.putPrefString(
             FnReaderConfigDialog.KEY_SOURCES_SINCE,
             (if (serverTime > 0) serverTime else System.currentTimeMillis()).toString()
         )
         saveSourceSnapshot(currentUrls)
-        return "书源首次合并：上传 ${all.size} 个（新增 ${obj.optInt("added")}　更新 ${obj.optInt("updated")}）"
+        return SourceStats(
+            text = "书源首次合并：上传 ${all.size} 个（新增 ${obj.optInt("added")}　更新 ${obj.optInt("updated")}）",
+            uploaded = all.size,
+            total = total,
+            firstSync = true
+        )
     }
 
     /** 之后每轮：本机改过/删掉的推上去，服务端更进的拉回来 */
@@ -572,11 +642,12 @@ object FnReaderAutoSync {
         token: String,
         since: Long,
         currentUrls: Set<String>
-    ): String {
-        val parts = appDb.bookSourceDao.flowAll().first()
+    ): SourceStats {
+        val parts = appDb.bookSourceDao.flowAll().first().filter { it.bookSourceUrl.isNotBlank() }
         val changed = ArrayList<BookSource>()
         parts.forEach { p ->
-            if (p.lastUpdateTime > since) {
+            // 新导入的书源 lastUpdateTime 可能还是 0，按「本轮有变更」处理，否则增量同步会永久漏推
+            if (p.lastUpdateTime > since || p.lastUpdateTime <= 0L) {
                 appDb.bookSourceDao.getBookSource(p.bookSourceUrl)?.let { changed.add(it) }
             }
         }
@@ -599,14 +670,9 @@ object FnReaderAutoSync {
             val payload = JSONObject().apply {
                 put("since", since)
                 put("updated", JSONArray().also { arr -> changed.forEach { arr.put(sourceJson(it)) } })
-                put("deleted", JSONArray().also { arr ->
-                    goneUrls.forEach { url ->
-                        arr.put(JSONObject().apply {
-                            put("bookSourceUrl", url)
-                            put("lastUpdateTime", System.currentTimeMillis())
-                        })
-                    }
-                })
+                // T4：服务端 0.1.18 起 deleted 接受字符串或对象；客户端固定发字符串数组，
+                // 兼容旧服务端，不要改成对象。
+                put("deleted", JSONArray().also { arr -> goneUrls.forEach { arr.put(it) } })
             }.toString()
             val r = FnReaderRemote.fetch("POST", "$base/api/m/sources/sync", token, payload, 180000)
             if (r.first !in 200..299) throw IllegalStateException(FnReaderRemote.explainCode(r.first, r.second))
@@ -620,12 +686,19 @@ object FnReaderAutoSync {
         }
         appCtx.putPrefString(FnReaderConfigDialog.KEY_SOURCES_SINCE, serverTime.toString())
         saveSourceSnapshot(currentUrls)
-        return buildString {
+        val text = buildString {
             append("书源同步：推 $pushed 个　拉 $pulled 个")
             if (pushedDeleted > 0) append("　推送删除 $pushedDeleted 个")
             if (removed > 0) append("　服务端删 $removed 个")
             append("　飞牛 $total 个")
         }
+        return SourceStats(
+            text = text,
+            uploaded = pushed,
+            pulled = pulled,
+            deleted = pushedDeleted,
+            total = total
+        )
     }
 
     private suspend fun mergePull(arr: JSONArray?): Int {
