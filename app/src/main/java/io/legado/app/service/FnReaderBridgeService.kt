@@ -451,10 +451,12 @@ class FnReaderBridgeService : BaseService() {
         val fileUrl = payload.optString("fileUrl")
         // 下载原文件用的是任务里单独下发的令牌，避免客户端配置里的令牌不匹配
         val fileToken = payload.optString("token").ifEmpty { item.token }
-        // 目录先行：服务端在 payload 里带 tocOnly/mode=toc，客户端就只回 part0，
+        // 目录先行：服务端在 payload 里带 tocOnly/mode=toc，且本机开关开着，才只回 part0；
         // 正文留给 ebook-chapter 任务按需补（见 fnreader-toc-only-server-spec-20261115.md）
-        val tocOnly = payload.optBoolean("tocOnly", false) ||
+        val tocRequested = payload.optBoolean("tocOnly", false) ||
             payload.optString("mode").equals("toc", true)
+        val tocOnly = tocRequested &&
+            getPrefString(FnReaderConfigDialog.KEY_TOC_MODE, "1") == "1"
 
         var ok = false
         var data: JSONObject? = null
