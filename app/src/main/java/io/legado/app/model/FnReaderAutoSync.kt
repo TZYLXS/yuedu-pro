@@ -511,21 +511,25 @@ object FnReaderAutoSync {
     // ---------------- ⑨ 书源双向同步 ----------------
 
     private suspend fun runSources(base: String, token: String): String {
-        if (appCtx.getPrefString(KEY_NO_SOURCE_SYNC, "0") == "1") return ""
+        // 404 只跳过 6 小时：旧版服务端/临时 404 不能让书源同步永久失效
+        val skipUntil = appCtx.getPrefString(KEY_NO_SOURCE_SYNC, "0")?.toLongOrNull() ?: 0L
+        if (skipUntil > System.currentTimeMillis()) return ""
         val since = appCtx.getPrefString(FnReaderConfigDialog.KEY_SOURCES_SINCE, "0")?.toLongOrNull() ?: 0L
         val parts = appDb.bookSourceDao.flowAll().first()
         val currentUrls = parts.map { normSourceUrl(it.bookSourceUrl) }.toHashSet()
         return try {
-            if (since <= 0L) {
+            val text = if (since <= 0L) {
                 firstSync(base, token, currentUrls)
             } else {
                 incrementalSync(base, token, since, currentUrls)
             }
+            appCtx.putPrefString(KEY_NO_SOURCE_SYNC, "0")
+            text
         } catch (e: Exception) {
             val msg = FnReaderRemote.describeError(e)
             if (msg.contains("404")) {
-                appCtx.putPrefString(KEY_NO_SOURCE_SYNC, "1")
-                "书源同步：服务端没有这个接口，已跳过"
+                appCtx.putPrefString(KEY_NO_SOURCE_SYNC, (System.currentTimeMillis() + 6 * 3600 * 1000L).toString())
+                "书源同步：服务端没有这个接口，6 小时后重试"
             } else {
                 "书源同步失败：$msg"
             }
