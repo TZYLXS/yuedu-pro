@@ -1,27 +1,34 @@
 package io.legado.app.ui.config
 
-import android.content.Intent
+import android.content.DialogInterface
 import android.graphics.Typeface
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
+import android.text.InputType
 import android.util.Base64
 import android.util.TypedValue
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.widget.SwitchCompat
 import io.legado.app.R
 import io.legado.app.base.BaseDialogFragment
 import io.legado.app.data.appDb
 import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookSource
+import io.legado.app.databinding.DialogEditTextBinding
 import io.legado.app.databinding.DialogFnreaderConfigBinding
 import io.legado.app.help.book.BookHelp
 import io.legado.app.lib.dialogs.alert
 import io.legado.app.lib.dialogs.selector
 import io.legado.app.lib.theme.ThemeStore
+import io.legado.app.lib.theme.accentColor
 import io.legado.app.lib.theme.primaryColor
 import io.legado.app.model.FnReaderAutoSync
 import io.legado.app.model.FnReaderRemote
@@ -29,6 +36,7 @@ import io.legado.app.service.FnReaderBridgeService
 import io.legado.app.ui.association.OnLineImportActivity
 import io.legado.app.ui.browser.WebViewActivity
 import io.legado.app.utils.GSON
+import io.legado.app.utils.applyTint
 import io.legado.app.utils.getPrefString
 import io.legado.app.utils.openUrl
 import io.legado.app.utils.putPrefString
@@ -58,9 +66,10 @@ import java.util.Locale
 /**
  * 接入 FnReader（飞牛 fnOS）服务器
  *
- * 设计对齐 FnReader 的「App 同步接口」：
- * 一次 `GET /api/m/sync` 就能拿到书架、进度、书源概况，所以这个入口以同步为核心，
- * 把导入书源、回传书架与进度、上传缓存、书源双向同步、网页书架、接入手册收在同一个菜单里。
+ * 菜单按 Legado「备份与恢复」页的分组条目风格重做：
+ * - 服务器地址 / 令牌：点一行弹输入框，不再常驻两个输入框
+ * - 手机解析待命、TOC 目录先行、TRE 代理解析：滑动开关
+ * - 其余动作一项一行，长任务点一下弹出进度框
  */
 class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config) {
 
@@ -74,6 +83,11 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
 
         /** 最近一次心跳拿到的服务器版本号，空 = 当前离线 */
         const val KEY_ONLINE = "fnReaderOnlineVersion"
+
+        /** 客户端「目录先行」开关（1 = 只回目录，0 = 整本上传） */
+        const val KEY_TOC_MODE = "fnReaderTocMode"
+        private const val KEY_TRE_PROXY = "fnReaderServerTreProxy"
+
         private const val DOC_SYNC = "https://github.com/TZYLXS/FnReader/blob/main/docs/APP同步接口.md"
         private const val DOC_APK = "https://github.com/TZYLXS/FnReader/blob/main/docs/APK接入.md"
         private const val DOC_PHONE = "https://github.com/TZYLXS/FnReader/blob/main/docs/手机接入API.md"
@@ -122,10 +136,31 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
     /** 探测成功后记住可用的地址，后续各菜单直接复用，避免每次再试一遍 */
     private var resolvedBase: String? = null
 
+    /** 当前弹出的进度框；同一时间只允许一个长任务 */
+    private var actionDialog: AlertDialog? = null
+    private var actionText: TextView? = null
+
+    private var tvServerValue: TextView? = null
+    private var tvTokenValue: TextView? = null
+    private var tvTocSummary: TextView? = null
+    private var tvTreSummary: TextView? = null
+
+    private var swBridge: SwitchCompat? = null
+    private var swToc: SwitchCompat? = null
+    private var swTre: SwitchCompat? = null
+
+    /** 服务端 /api/config 是否读取成功；没读到时开关仍可点，点完直接写回 */
+    private var remoteCfgLoaded = false
+    private var tocOn = true
+    private var treOn = true
+
     /** 传书选文件：只读一次，不申请持久化权限 */
     private val pickEbookFile =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-            if (uri != null) startUploadEbook(uri)
+            if (uri != null && requireServerAndToken() != null) {
+                startAction("传书到飞牛", "正在读取并上传：${ebookName(uri)}")
+                startUploadEbook(uri)
+            }
         }
 
     override fun onStart() {
@@ -138,176 +173,482 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
 
     override fun onFragmentCreated(view: View, savedInstanceState: Bundle?) {
         binding.toolBar.setBackgroundColor(primaryColor)
-        binding.editServer.setText(getPrefString(KEY_SERVER, ""))
-        binding.editToken.setText(getPrefString(KEY_TOKEN, ""))
-        binding.tvSave.onClick {
-            savePrefs()
-            toastOnUi("已保存服务器地址与令牌")
-        }
-        binding.tvTest.onClick { syncFromServer(silent = false) }
-        binding.tvSync.onClick { syncFromServer(silent = false) }
         binding.tvCancel.onClick { dismiss() }
-        binding.tvStatus.text = if (bridgeOn()) {
-            val online = getPrefString(KEY_ONLINE, "").orEmpty()
-            if (online.isNotEmpty()) {
-                "已连接 FnReader $online（保活中）\n本机已登记到网页「设置 → 软总线」，飞牛跑不了的书源会派过来"
-            } else {
-                "手机解析待命已开启，正在连接服务器…"
-            }
-        } else {
-            getString(R.string.fnreader_sync_idle)
-        }
+        tocOn = getPrefString(KEY_TOC_MODE, "1") == "1"
+        treOn = getPrefString(KEY_TRE_PROXY, "1") == "1"
+        refreshHeaderStatus()
         buildMethods()
         // 开关还开着的话，把服务拉起来（进程被杀后重进设置也能恢复待命）
         if (bridgeOn() && !FnReaderBridgeService.isRun) {
             runCatching { FnReaderBridgeService.start(requireContext()) }
         }
+        loadRemoteConfig(silent = true)
     }
 
-    private fun savePrefs() {
-        putPrefString(KEY_SERVER, binding.editServer.text?.toString()?.trim().orEmpty())
-        putPrefString(KEY_TOKEN, binding.editToken.text?.toString()?.trim().orEmpty())
-    }
+    // ---------------- 菜单 ----------------
 
     private fun buildMethods() {
         binding.listMethods.removeAllViews()
-        addMethod(
-            "① 导入书源（推荐的接法）",
-            "下载 /api/m/sources.json（Legado 数组格式）直接导入，导入后搜索、目录、正文都走飞牛"
-        ) { importSources() }
-        addMethod(
-            "② 全部同步到飞牛书架（新书自动建、重名跳过）",
-            "本机书架上每本书都推给飞牛：飞牛没有的书自动建进书架（POST /api/m/books，带封面与简介），"
-                    + "origin 填书源的真实地址（bookSourceUrl）、originName 填源名，服务端靠它取目录和正文；"
-                    + "再把章节与位置回传（POST /api/m/progress/batch）；书名相同的不重复添加，"
-                    + "封面一并回传（本机缓存图转 base64 落到 NAS 的 covers/），飞牛那边缺封面的会顺手补上"
-                    + "（回传字段见 docs《app回传接受规范》）"
-        ) { uploadProgress() }
-        addMethod(
-            "③ 打开飞牛阅读网页",
-            "用 App 内置浏览器打开 FnReader 网页书架"
-        ) { openWebShelf() }
-        addMethod(
-            "④ 接入手册",
-            "同步接口、APK 接入、手机接入 API 三份文档都在这里"
-        ) { showDocs() }
-        addMethod(
-            if (bridgeOn()) "⑤ 手机解析待命：已开启（点此关闭）"
-            else "⑤ 手机解析待命：已关闭（点此开启）",
-            "飞牛跑不了的书源（要 WebView / 加密接口）派给本机解析：开了之后保持后台常驻，"
-                    + "网页搜索命中这类书源时由本机执行 search / toc / content 并回传结果；"
-                    + "领任务时会把本机登记到网页「设置 → 软总线」，可以在那边单独暂停这台"
-        ) { toggleBridge() }
-        addMethod(
-            "⑥ 接入书源桥（一个「飞牛书库」源读完所有）",
-            "导入服务端自动生成的单品书源：搜索 / 详情 / 目录 / 正文全部走 /api/m/legado/*，"
-                    + "本机不解析、不装书源规则也能看书；换服务器地址后重新导入一次即可"
-                    + "（源规则里带着令牌，公网访问请用 https）"
-        ) { importBridge() }
-        addMethod(
-            "⑦ 查看软总线（哪台设备在代理解析）",
-            "GET /api/bus：列出已报到的手机、在线状态、累计代理解析次数；"
-                    + "要暂停某一台，在飞牛网页「设置 → 软总线」里点一下就行"
-        ) { showBus() }
-        addMethod(
-            "⑧ 传书到飞牛（本机电子书直接推上去）",
-            "选本机一个 pdf / mobi / azw3 / epub / txt 直接推给飞牛（POST /api/m/ebook/upload，裸 body），"
-                    + "不用挂 WebDAV；上传令牌每次现取（GET /api/ebook/upload），"
-                    + "服务端重置过传书令牌也不用改这里，传完飞牛自动入库并派给本机解析"
-        ) { pickEbookFile.launch(UPLOAD_MIMES) }
-        addMethod(
-            "⑨ 立即同步（书源 + 缓存）",
-            "马上跑一轮书源双向同步和缓存上传：结果单独弹「FnReader 同步结果」通知，"
-                    + "同时写入「同步记录」，不会被手机解析常驻通知覆盖"
-        ) { syncNow() }
-        addMethod(
-            "⑩ 同步记录（最近 50 条）",
-            "查看每轮上传 / 下载 / 删除数量、飞牛总数、耗时与失败原因；"
-                    + "杀进程或重启后仍保留，通知被覆盖也能回看"
-        ) { startActivity<FnReaderSyncLogActivity>() }
-        // ⑧ 上传缓存、⑨ 书源同步已改为自动：连上服务端后每 5 分钟由 FnReaderBridgeService 跑一次，
-        // 服务端没这两个接口就自动跳过，这里不再放手动按钮。
+        tvServerValue = null
+        tvTokenValue = null
+        tvTocSummary = null
+        tvTreSummary = null
+        swBridge = null
+        swToc = null
+        swTre = null
+
+        section("连接")
+        tvServerValue = row("服务器地址", serverSummary(), "点击修改") { editServerDialog() }
+        tvTokenValue = row("访问令牌", tokenSummary(), "点击修改") { editTokenDialog() }
+        row("测试连接", onlineSummary(), "读取书架、进度与书源概况") {
+            runAction("测试连接") { syncFromServer(silent = false) }
+        }
+
+        section("同步")
+        row("同步书架", "把本机书架、阅读进度与封面推送到飞牛", "新书自动建，重名跳过") {
+            runAction("同步书架") { uploadProgress() }
+        }
+        row("立即同步", "书源双向同步 + 缓存上传", "结果同时写入同步记录") {
+            runAction("立即同步") { syncNow() }
+        }
+        row("同步记录", "最近 50 条上传 / 下载 / 删除结果", "杀进程或重启后仍保留") {
+            startActivity<FnReaderSyncLogActivity>()
+        }
+
+        section("功能开关")
+        swBridge = switchRow(
+            "手机解析待命",
+            "飞牛跑不动的书源派给本机解析",
+            bridgeOn()
+        ) { setBridge(it) }
+        swToc = switchRow(
+            "TOC 目录先行",
+            "目录先上传，正文按需回传（关闭则整本上传）",
+            tocOn
+        ) { setToc(it) }
+        tvTocSummary = lastSwitchSummary
+        swTre = switchRow(
+            "TRE 代理解析",
+            "EPUB / MOBI 交给在线设备解析（关闭则只用本机）",
+            treOn
+        ) { setTre(it) }
+        tvTreSummary = lastSwitchSummary
+        refreshCfgSummaries()
+
+        section("工具")
+        row("导入书源（推荐）", "下载 /api/m/sources.json 并直接导入", "导入后搜索、目录、正文都走飞牛") {
+            importSources()
+        }
+        row("接入书源桥", "一个「飞牛书库」源读完所有", "搜索 / 详情 / 目录 / 正文全走飞牛") {
+            importBridge()
+        }
+        row("查看软总线", "看哪台设备在代理解析", "设备、在线状态与累计次数") {
+            showBus()
+        }
+        row("打开飞牛阅读网页", "用 App 内置浏览器打开网页书架", null) {
+            openWebShelf()
+        }
+        row("接入手册", "同步接口、APK 接入、手机接入 API", null) {
+            showDocs()
+        }
+        row("传书到飞牛", "把本机 pdf / mobi / azw3 / epub / txt 直接推上去", "不用挂 WebDAV") {
+            pickEbookFile.launch(UPLOAD_MIMES)
+        }
+    }
+
+    private fun section(title: String) {
+        val ctx = requireContext()
+        binding.listMethods.addView(TextView(ctx).apply {
+            text = title
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(ThemeStore.textColorSecondary(ctx))
+            setPadding(dp(4), dp(18), dp(4), dp(6))
+        })
+    }
+
+    private var lastSwitchSummary: TextView? = null
+
+    private fun row(
+        title: String,
+        summary: String,
+        detail: String?,
+        action: () -> Unit
+    ): TextView {
+        val ctx = requireContext()
+        val wrap = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            isClickable = true
+            isFocusable = true
+            minimumHeight = dp(56)
+            setPadding(dp(4), dp(10), dp(4), dp(10))
+            val outValue = TypedValue()
+            ctx.theme.resolveAttribute(android.R.attr.selectableItemBackground, outValue, true)
+            setBackgroundResource(outValue.resourceId)
+        }
+        val texts = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        texts.addView(TextView(ctx).apply {
+            text = title
+            textSize = 16f
+            setTextColor(ThemeStore.textColorPrimary(ctx))
+        })
+        val value = TextView(ctx).apply {
+            text = summary
+            textSize = 12f
+            maxLines = 2
+            setTextColor(ThemeStore.textColorSecondary(ctx))
+            setPadding(0, dp(2), 0, 0)
+        }
+        texts.addView(value)
+
+        wrap.addView(texts)
+        wrap.addView(TextView(ctx).apply {
+            text = "›"
+            textSize = 20f
+            setTextColor(ThemeStore.textColorSecondary(ctx))
+            setPadding(dp(8), 0, dp(2), 0)
+        })
+        wrap.setOnClickListener { action() }
+        binding.listMethods.addView(wrap)
+        return value
+    }
+
+    private fun switchRow(
+        title: String,
+        summary: String,
+        checked: Boolean,
+        onChanged: (Boolean) -> Unit
+    ): SwitchCompat {
+        val ctx = requireContext()
+        val wrap = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = dp(56)
+            setPadding(dp(4), dp(10), dp(4), dp(10))
+        }
+        val texts = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        texts.addView(TextView(ctx).apply {
+            text = title
+            textSize = 16f
+            setTextColor(ThemeStore.textColorPrimary(ctx))
+        })
+        val desc = TextView(ctx).apply {
+            text = summary
+            textSize = 12f
+            maxLines = 2
+            setTextColor(ThemeStore.textColorSecondary(ctx))
+            setPadding(0, dp(2), 0, 0)
+        }
+        texts.addView(desc)
+        wrap.addView(texts)
+        val sw = SwitchCompat(ctx).apply {
+            isChecked = checked
+            applyTint(ctx.accentColor)
+            setOnCheckedChangeListener { _, value -> onChanged(value) }
+        }
+        wrap.addView(sw)
+        binding.listMethods.addView(wrap)
+        lastSwitchSummary = desc
+        return sw
+    }
+
+    private fun dp(value: Int): Int =
+        (value * requireContext().resources.displayMetrics.density).toInt()
+
+    // ---------------- 输入框 ----------------
+
+    private fun editServerDialog() {
+        val ctx = requireContext()
+        val edit = DialogEditTextBinding.inflate(layoutInflater).apply {
+            editView.hint = getString(R.string.fnreader_addr_hint)
+            editView.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+            editView.setText(rawServer())
+            editView.setSelection(editView.text?.length ?: 0)
+        }
+        alert("服务器地址") {
+            customView { edit.root }
+            okButton {
+                val value = edit.editView.text?.toString()?.trim().orEmpty()
+                putPrefString(KEY_SERVER, value)
+                resolvedBase = null
+                refreshValueRows()
+                refreshHeaderStatus()
+                toastOnUi(if (value.isEmpty()) "已清空服务器地址" else "服务器地址已保存")
+                if (value.isNotEmpty()) loadRemoteConfig(silent = true)
+            }
+            noButton()
+        }
+    }
+
+    private fun editTokenDialog() {
+        val ctx = requireContext()
+        val edit = DialogEditTextBinding.inflate(layoutInflater).apply {
+            editView.hint = getString(R.string.fnreader_token_hint)
+            editView.inputType =
+                InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+            editView.setText(token())
+            editView.setSelection(editView.text?.length ?: 0)
+        }
+        alert("访问令牌") {
+            customView { edit.root }
+            okButton {
+                putPrefString(KEY_TOKEN, edit.editView.text?.toString()?.trim().orEmpty())
+                refreshValueRows()
+                toastOnUi("访问令牌已保存")
+                loadRemoteConfig(silent = true)
+            }
+            noButton()
+        }
+    }
+
+    private fun refreshValueRows() {
+        tvServerValue?.text = serverSummary()
+        tvTokenValue?.text = tokenSummary()
+    }
+
+    private fun serverSummary(): String {
+        val value = rawServer()
+        return if (value.isEmpty()) "未设置" else value
+    }
+
+    private fun tokenSummary(): String {
+        val value = token()
+        return when {
+            value.isEmpty() -> "未设置"
+            value.length <= 4 -> "已设置 ····$value"
+            else -> "已设置 ····${value.takeLast(4)}"
+        }
+    }
+
+    private fun onlineSummary(): String {
+        val online = getPrefString(KEY_ONLINE, "").orEmpty()
+        return if (online.isNotEmpty()) "上次连接 FnReader $online" else "点按测试地址与令牌"
+    }
+
+    private fun refreshHeaderStatus() {
+        binding.tvStatus.text = if (bridgeOn()) {
+            val online = getPrefString(KEY_ONLINE, "").orEmpty()
+            if (online.isNotEmpty()) {
+                "已连接 FnReader $online（保活中）\n本机已登记到网页「设置 → 软总线」"
+            } else {
+                "手机解析待命已开启，正在连接服务器…"
+            }
+        } else {
+            "手机解析待命已关闭\n需要时点「功能开关」里重新打开"
+        }
+    }
+
+    // ---------------- 进度框 ----------------
+
+    private fun startAction(title: String, initial: String = "正在处理…"): Boolean {
+        if (actionDialog != null) {
+            toastOnUi("已有任务在运行，等它结束再点")
+            return false
+        }
+        val ctx = requireContext()
+        val text = TextView(ctx).apply {
+            this.text = initial
+            textSize = 14f
+            setTextColor(ThemeStore.textColorPrimary(ctx))
+            setPadding(dp(20), dp(8), dp(20), dp(8))
+        }
+        val scroll = ScrollView(ctx).apply {
+            addView(text)
+            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+        }
+        val dialog = alert(title) {
+            customView { scroll }
+            negativeButton("关闭") {
+                actionDialog = null
+                actionText = null
+            }
+            setCancelable(true)
+        }
+        actionDialog = dialog
+        actionText = text
+        return true
+    }
+
+    private fun runAction(title: String, action: () -> Unit) {
+        if (requireServerAndToken() == null) return
+        if (!startAction(title)) return
+        binding.root.post {
+            if (!isAdded) return@post
+            runCatching(action).onFailure {
+                setStatus("失败：${FnReaderRemote.describeError(it)}")
+            }
+        }
+    }
+
+    private fun setStatus(text: String) {
+        binding.tvStatus.text = text
+        actionText?.text = text
     }
 
     private fun syncNow() {
         val base = requireServerAndToken() ?: return
-        binding.tvStatus.text = "同步中…（书源 + 缓存）"
+        setStatus("同步中…（书源 + 缓存）")
         execute { FnReaderAutoSync.run(base, token()) }
             .onSuccess { r ->
-                binding.tvStatus.text = r.summary().ifEmpty { "同步完成" }
+                setStatus(r.summary().ifEmpty { "同步完成" })
                 toastOnUi(r.countText())
             }
             .onError {
+                setStatus("同步失败：${FnReaderRemote.describeError(it)}")
                 toastOnUi("同步失败：${FnReaderRemote.describeError(it)}")
             }
     }
 
     private fun bridgeOn(): Boolean = getPrefString(KEY_BRIDGE, "0") == "1"
 
+    private fun bindBridge(checked: Boolean) {
+        swBridge?.let { sw ->
+            sw.setOnCheckedChangeListener(null)
+            sw.isChecked = checked
+            sw.setOnCheckedChangeListener { _, value -> setBridge(value) }
+        }
+    }
+
     /**
      * 手机解析待命开关。开启前先把可用地址定下来（探一次 /api/m/info 同源探测），
      * 免得服务里拿到的是那个恒回 invalid token 的网页代理地址。
      */
-    private fun toggleBridge() {
+    private fun setBridge(enabled: Boolean) {
         val ctx = requireContext()
-        if (bridgeOn()) {
+        if (!enabled) {
             putPrefString(KEY_BRIDGE, "0")
             runCatching { FnReaderBridgeService.stop(ctx) }
-            buildMethods()
-            binding.tvStatus.text = "手机解析待命已关闭"
+            bindBridge(false)
+            refreshHeaderStatus()
             toastOnUi("已关闭手机解析待命")
             return
         }
-        val base = serverBase() ?: return
-        if (token().isEmpty()) {
-            toastOnUi("先填访问令牌（FnReader 设置 → 手机接入 里那个）")
+        val base = serverBase()
+        if (base == null || token().isEmpty()) {
+            bindBridge(false)
+            if (token().isEmpty()) toastOnUi("先填访问令牌（FnReader 设置 → 手机接入 里那个）")
             return
         }
         val openBase = resolvedBase ?: base
         putPrefString(KEY_SERVER, openBase)
         putPrefString(KEY_BRIDGE, "1")
         runCatching { FnReaderBridgeService.start(ctx) }
-        buildMethods()
-        binding.tvStatus.text = "手机解析待命已开启，服务器：$openBase\n" +
-            "领任务时会把本机登记到网页「设置 → 软总线」，可以在那边单独暂停"
+        bindBridge(true)
+        refreshValueRows()
+        refreshHeaderStatus()
         toastOnUi("已开启，回飞牛网页搜书即可借用本机解析")
     }
 
-    private fun addMethod(title: String, desc: String, action: () -> Unit) {
-        val ctx = requireContext()
-        val row = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            isClickable = true
-            isFocusable = true
-            setPadding(dp(4), dp(10), dp(4), dp(10))
-            val outValue = TypedValue()
-            ctx.theme.resolveAttribute(android.R.attr.selectableItemBackground, outValue, true)
-            setBackgroundResource(outValue.resourceId)
+    // ---------------- 服务端 TOC / TRE 开关 ----------------
+
+    private fun bindToc(checked: Boolean) {
+        swToc?.let { sw ->
+            sw.setOnCheckedChangeListener(null)
+            sw.isChecked = checked
+            sw.setOnCheckedChangeListener { _, value -> setToc(value) }
         }
-        row.addView(TextView(ctx).apply {
-            text = title
-            textSize = 16f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(ThemeStore.textColorPrimary(ctx))
-        })
-        row.addView(TextView(ctx).apply {
-            text = desc
-            textSize = 12f
-            setTextColor(ThemeStore.textColorSecondary(ctx))
-            setPadding(0, dp(2), 0, 0)
-        })
-        row.setOnClickListener { action() }
-        binding.listMethods.addView(row)
     }
 
-    private fun dp(value: Int): Int =
-        (value * requireContext().resources.displayMetrics.density).toInt()
+    private fun bindTre(checked: Boolean) {
+        swTre?.let { sw ->
+            sw.setOnCheckedChangeListener(null)
+            sw.isChecked = checked
+            sw.setOnCheckedChangeListener { _, value -> setTre(value) }
+        }
+    }
+
+    private fun setToc(enabled: Boolean) {
+        tocOn = enabled
+        putPrefString(KEY_TOC_MODE, if (enabled) "1" else "0")
+        bindToc(enabled)
+        toastOnUi("TOC 目录先行已${if (enabled) "开启" else "关闭"}")
+    }
+
+    private fun setTre(enabled: Boolean) {
+        setServerSwitch("treProxy", enabled, !enabled, ::bindTre)
+    }
+
+    private fun setServerSwitch(
+        field: String,
+        enabled: Boolean,
+        previous: Boolean,
+        bind: (Boolean) -> Unit
+    ) {
+        val base = requireServerAndToken()
+        if (base == null) {
+            bind(previous)
+            return
+        }
+        execute {
+            request("POST", "$base/api/config", token(), JSONObject().put(field, enabled).toString())
+        }.onSuccess { r ->
+            if (r.first in 200..299) {
+                readConfig(r.second)
+                toastOnUi("TRE 代理解析已${if (enabled) "开启" else "关闭"}")
+            } else {
+                bind(previous)
+                toastOnUi("TRE 代理解析设置失败：HTTP ${r.first} ${explain(r.second)}")
+            }
+        }.onError {
+            bind(previous)
+            toastOnUi("TRE 代理解析设置失败：${FnReaderRemote.describeError(it)}")
+        }
+    }
+
+    private fun loadRemoteConfig(silent: Boolean) {
+        if (rawServer().isEmpty() || token().isEmpty()) {
+            remoteCfgLoaded = false
+            refreshCfgSummaries()
+            return
+        }
+        val base = requireServerAndToken() ?: return
+        execute {
+            request("GET", "$base/api/config", token(), null)
+        }.onSuccess { r ->
+            if (r.first in 200..299) {
+                readConfig(r.second)
+            } else {
+                remoteCfgLoaded = false
+                refreshCfgSummaries()
+                if (!silent) toastOnUi("读取服务端设置失败：HTTP ${r.first}")
+            }
+        }.onError {
+            remoteCfgLoaded = false
+            refreshCfgSummaries()
+            if (!silent) toastOnUi("读取服务端设置失败：${FnReaderRemote.describeError(it)}")
+        }
+    }
+
+    private fun readConfig(body: String) {
+        val obj = runCatching { JSONObject(body) }.getOrNull() ?: return
+        remoteCfgLoaded = true
+        treOn = obj.optBoolean("treProxy", true)
+        putPrefString(KEY_TRE_PROXY, if (treOn) "1" else "0")
+        bindTre(treOn)
+        refreshCfgSummaries()
+    }
+
+    private fun refreshCfgSummaries() {
+        tvTocSummary?.text = "目录先上传，正文按需回传（关闭则整本上传）"
+        tvTreSummary?.text = if (remoteCfgLoaded) {
+            "EPUB / MOBI 交给在线设备解析（关闭则只用本机）"
+        } else {
+            "服务端设置未读取，切换后直接写入"
+        }
+    }
 
     // ---------------- 地址与令牌 ----------------
 
-    private fun rawServer(): String = binding.editServer.text?.toString()?.trim().orEmpty()
+    private fun rawServer(): String = getPrefString(KEY_SERVER, "").orEmpty().trim()
 
-    private fun token(): String = binding.editToken.text?.toString()?.trim().orEmpty()
+    private fun token(): String = getPrefString(KEY_TOKEN, "").orEmpty().trim()
 
     /**
      * 规范化服务器地址：缺协议补 http://；只保留用户填的端口与路径，不擅自拼 /app/legado-web
@@ -333,7 +674,6 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
                 toastOnUi("提醒：这不是内网地址，请用 https，否则令牌在网络上是明文")
             }
         }
-        savePrefs()
         return s
     }
 
@@ -404,7 +744,7 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
             return
         }
         // 先给个反馈，避免点下去像没反应
-        binding.tvStatus.text = "同步中…（正在连接 ${bases.first()}）"
+        setStatus("同步中…（正在连接 ${bases.first()}）")
         execute {
             var lastCode = 0
             var lastBody = ""
@@ -433,10 +773,10 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
             val okBase = result.okBase
             if (okBase != null) {
                 resolvedBase = okBase
-                binding.editServer.setText(okBase)
                 putPrefString(KEY_SERVER, okBase)
+                refreshValueRows()
                 val summary = summaryOf(result.body)
-                binding.tvStatus.text = if (result.merged != null) "$summary\n${result.merged}" else summary
+                setStatus(if (result.merged != null) "$summary\n${result.merged}" else summary)
                 if (!silent) toastOnUi(result.merged ?: "同步完成")
             } else {
                 val reason = if (result.code == 401) {
@@ -444,12 +784,12 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
                 } else {
                     explain(result.body)
                 }
-                binding.tvStatus.text = "同步失败：$reason\n试过：${result.triedUrl}"
+                setStatus("同步失败：$reason\n试过：${result.triedUrl}")
                 if (!silent) toastOnUi("同步失败：$reason")
             }
         }.onError {
             val msg = FnReaderRemote.describeError(it)
-            binding.tvStatus.text = "连接失败：$msg"
+            setStatus("连接失败：$msg")
             toastOnUi("连接失败：$msg")
         }
     }
@@ -529,7 +869,7 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
         val link = "legado://import/bookSource?src=${Uri.encode(url)}"
         startActivity<OnLineImportActivity> { data = Uri.parse(link) }
         // 不在状态栏里回显带令牌的地址，只显示接口
-        binding.tvStatus.text = "正在导入书源桥…\n$base/api/m/booksource（令牌放在请求里）"
+        setStatus("正在导入书源桥…\n$base/api/m/booksource（令牌放在请求里）")
     }
 
     /**
@@ -582,7 +922,7 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
      */
     private fun uploadProgress() {
         val base = requireServerAndToken() ?: return
-        binding.tvStatus.text = "全部同步中…（先比对飞牛书架）"
+        setStatus("全部同步中…（先比对飞牛书架）")
         execute {
             val (code, body) = request("GET", syncApi(base), token(), null)
             if (code !in 200..299) throw IllegalStateException("读取飞牛书架失败：${explain(body)}")
@@ -735,11 +1075,11 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
                 append("\n飞牛书架共 $shelfTotal 本（已发送 ${toProgress.size} 本进度，origin=bookSourceUrl）")
             }
         }.onSuccess { summary ->
-            binding.tvStatus.text = summary
+            setStatus(summary)
             toastOnUi(summary.replace("\n", "　"))
         }.onError {
             val msg = FnReaderRemote.describeError(it)
-            binding.tvStatus.text = "全部同步失败：$msg"
+            setStatus("全部同步失败：$msg")
             toastOnUi("全部同步失败：$msg")
         }
     }
@@ -751,7 +1091,7 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
      */
     private fun uploadCache() {
         val base = requireServerAndToken() ?: return
-        binding.tvStatus.text = "上传缓存中…（扫描本机 book_cache）"
+        setStatus("上传缓存中…（扫描本机 book_cache）")
         execute {
             val sourceIndex = buildSourceIndex()
             val books = appDb.bookDao.flowAll().first()
@@ -811,11 +1151,11 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
                 if (detail.isNotEmpty()) append("\n").append(detail.toString().trimEnd())
             }
         }.onSuccess { summary ->
-            binding.tvStatus.text = summary
+            setStatus(summary)
             toastOnUi(summary.lineSequence().first())
         }.onError {
             val msg = FnReaderRemote.describeError(it)
-            binding.tvStatus.text = "上传缓存失败：$msg"
+            setStatus("上传缓存失败：$msg")
             toastOnUi("上传缓存失败：$msg")
         }
     }
@@ -830,7 +1170,7 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
         val ctx = requireContext()
         val name = ebookName(uri)
         val size = ebookSize(uri)
-        binding.tvStatus.text = "传书中…$name"
+        setStatus("传书中…$name")
         execute {
             val r = FnReaderRemote.uploadEbook(base, tk, name, size) {
                 ctx.contentResolver.openInputStream(uri)
@@ -856,11 +1196,11 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
                 if (sha.isNotEmpty()) append("\nsha1 ").append(sha)
             }
         }.onSuccess { summary ->
-            binding.tvStatus.text = summary
+            setStatus(summary)
             toastOnUi(summary.lineSequence().first())
         }.onError {
             val msg = FnReaderRemote.describeError(it)
-            binding.tvStatus.text = "传书失败：$msg"
+            setStatus("传书失败：$msg")
             toastOnUi("传书失败：$msg")
         }
     }
@@ -952,7 +1292,7 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
      */
     private fun syncSourcesBoth() {
         val base = requireServerAndToken() ?: return
-        binding.tvStatus.text = "书源双向同步中…（读取本地书源）"
+        setStatus("书源双向同步中…（读取本地书源）")
         execute {
             val since = getPrefString(KEY_SOURCES_SINCE, "0")?.toLongOrNull() ?: 0L
             val parts = appDb.bookSourceDao.flowAll().first()
@@ -1065,11 +1405,11 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
                 if (truncated) append("\n服务端返回被截断，再点一次继续")
             }
         }.onSuccess { summary ->
-            binding.tvStatus.text = summary
+            setStatus(summary)
             toastOnUi(summary.lineSequence().first())
         }.onError {
             val msg = FnReaderRemote.describeError(it)
-            binding.tvStatus.text = "书源同步失败：$msg"
+            setStatus("书源同步失败：$msg")
             toastOnUi("书源同步失败：$msg")
         }
     }
@@ -1406,7 +1746,6 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
     }
 
 }
-
 
 // ---------------- 书源地址工具（补 origin 用） ----------------
 
