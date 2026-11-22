@@ -1,28 +1,47 @@
-## 阅读Pro 3.0.10.1（versionCode 3001001）
+## 阅读Pro 3.1.4.1（versionCode 3010401）
 
 Legado（阅读）`3.23.110211` 编译，**minSdk 24 / targetSdk 33**（Android 7.0+），分 **arm64-v8a** 与 **armeabi-v7a** 两个产物。
 应用名「阅读Pro」，包名 `io.legado.pro`，可与官方版、安卓 4.0 版共存安装。
-与 **安卓 4.0 版（`io.legado.api19`）3.0.10.1** 同步发布、同一套版本号；版号按服务端 FnReader **3.0.10 + 0.0.0.1** 对齐。
+与 **安卓 4.0 版（`io.legado.api19`）3.1.4.1** 同步发布、同一套版本号；版号按服务端 FnReader **3.1.4 + 0.0.0.1** 对齐。
 
-### 仅同步服务端 3.0.10，无客户端代码改动
+### 客户端修复：书源反向同步 404 不再永久跳过
 
-服务端从 `3.0.8` 连发到 `v3.0.10`（tag `255c51c`），本版只同步版号，客户端代码零改动：
+之前 `FnReaderAutoSync.runSources` 拉取 `/api/m/sources` 遇到 404 会把 `fnReaderNoSourceSync` 永久写成 `"1"`，服务端升级后客户端也不会再试，必须重装或清数据。
 
-- **3.0.9 修复导出卡死**：TXT 导出不再占用规则解析 Python 进程池，改用一次性独立进程；单次 60 秒硬超时，超过 4000 章直接走 JS 拼装；stdin EPIPE 不再触发 `uncaughtException`。
-- **3.0.10 修复全新安装启动失败**：启动脚本依次探测 `nodejs_v22/v24/v20/v26` 与系统 node，逐个执行 `node -v` 校验，跳过缺 libatomic 等损坏运行时，并记录实际使用的 Node。
-- `docs/APP同步接口.md` blob 仍为 `f4b8c9f957a1d609eb0a231123fadaa196ec5644`，`docs/软总线路由与权重.md`、`docs/AI构建指南.md` 也未变；`/api/m/*` 契约未变。
-- 3.0.2.1 的 6 类回传、软总线、封面/书源/缓存通道全部沿用。
+- 404 改为 **6 小时时间戳退避**：写入 `now + 6h`，到期自动重试，成功后清为 `"0"`
+- 旧值 `"1"` 按时间戳解析为 1970 年，已过期，老用户升级后自动恢复同步
+- 全仓仅 4 处读取该键，未发现其他按旧布尔语义使用的代码
+- 新增 `docs/客户端书源反向同步.md`，记录接口字段、5 分钟同步预期与验收步骤
+
+### 同步服务端 FnReader v3.1.4
+
+服务端 main/tag `v3.1.4` 为 `b230d8e6609e962481e6077bb01356c9528999c4`，相对 `v3.0.10` 共 12 个提交：
+
+- **3.0.11–3.0.16**：空书架保留亚马逊导航；manifest 补 Node/Java 依赖；设置项改名「亚马逊出版物封面」；修复设置页 `ReferenceError`；`GET /api/books` 不再每次 `dedupeShelf`；Python 持久进程池补 `--worker`
+- **3.1.0**：Java 目录引擎移出、TOC 规范化改 Python、进程池扩容、搜索 12 路并发
+- **3.1.1**：Python 兼容 3.9；软总线回传目录改单遍解析，兼容直接数组、`{chapters:[...]}`、字符串化 JSON、`title|name`、`url|chapterUrl|fileUrl`，上限 20000 章
+- **3.1.2**：发布包补 `vendor39/libatomic`
+- **3.1.3**：电子书扫描跳过 `cache/covers/tmp`
+- **3.1.4**：修复 `linkLocalEbooksToShelf` 在电子书索引为空时提前 `return`，导致失效 ebook 条目未被移除
+
+客户端契约复核：
+
+- `docs/APP同步接口.md` blob 仍为 `f4b8c9f957a1d609eb0a231123fadaa196ec5644`，未变
+- `docs/AI构建指南.md` blob 仍为 `2937e4d4adfec9ae8d2e0c36920afac29ddfc97d`，未变
+- `docs/软总线路由与权重.md` 仅新增 8 行「回传数据解析（3.1.1+）」，属于服务端容错，没有新增客户端必填字段、路由或任务类型
+- `/api/m/*` 路径集合新旧均为 30 个，无差异
 
 ### 包信息
 
 | 产物 | 体积 | SHA256 |
 | --- | --- | --- |
-| `yuedu_pro_app_3.0.10.1-arm64.apk` | 18 796 333 B（17.93 MB） | `3409671F0562C23D2C53CDC1638E298E6CB44B62BC94EDDD5DE64D472A9CBD52` |
-| `yuedu_pro_app_3.0.10.1-armv7.apk` | 18 751 353 B（17.88 MB） | `274DF243765BD3CDEBC97E969661026AD98DCEB48352578AF9CDAEACB844FADE` |
+| `yuedu_pro_app_3.1.4.1-arm64.apk` | 18 796 891 B（17.93 MB） | `073D537AB44B6EF255A53506BF41C19D2EDB4BA11A02459DA112F2AC16CF38A3` |
+| `yuedu_pro_app_3.1.4.1-armv7.apk` | 18 751 919 B（17.88 MB） | `FAD349694BA52BEC0DFA6D7CEA4E284151E8E21B9CF74BE76D7AF405C2461B13` |
 
-- `aapt2 dump badging`：两包均 `versionCode='3001001' versionName='3.0.10.1'`，minSdk 24 / target 33，无 `application-debuggable`
-- `apksigner verify`：v2 true；minSdk ≥ 24 时 v1 显示 false 属正常，证书 `CN=FnReader YueDu`
-- 包内 `assets/updateLog.md` 首条为 `**2026/11/22（3.0.10.1）**`
+- `aapt2 dump badging`：两包均 `versionCode='3010401' versionName='3.1.4.1'`，minSdk 24 / target 33，无 `application-debuggable`
+- `apksigner verify`：v2 true；minSdk ≥ 24 时 v1 false 属正常；证书 `CN=FnReader YueDu`，SHA256 `81ce1c10476fa400ed962c4a18b54ae4497581320b1d940d896d62b6c609ef0f`
+- 包内 `assets/updateLog.md` 首条为 `**2026/11/22（3.1.4.1）**`
+- MuMu Android 12（x86_64 + ARM 翻译）覆盖安装 arm64 包，实际显示 3.1.4.1 更新日志并正常启动
 - 签名沿用 `keystore/yuedu.jks`，可直接覆盖安装旧版
 
 ### 安装方式
@@ -33,5 +52,5 @@ Legado（阅读）`3.23.110211` 编译，**minSdk 24 / targetSdk 33**（Android 
 
 ### 说明
 
-- 本版无客户端代码改动，未重复做真机加书/翻页/封面回传验证；3.0.2.1 的静态校验与真机遗留项保持不变。
-- 应用内「检查更新」仍指向 GitHub `TZYLXS/yuedu-pro` 的 `releases/latest`；本 Release 发布后即指向 `v3.0.10.1`。
+- 本版重点是客户端 404 退避修复；服务端 3.1.4 的契约没有新增客户端必填字段
+- 应用内「检查更新」指向 GitHub `TZYLXS/yuedu-pro` 的 `releases/latest`；本 Release 发布后即指向 `v3.1.4.1`

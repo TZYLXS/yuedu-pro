@@ -1,7 +1,7 @@
 # APP 回传接受规范
 
-> 服务端依据：FnReader `1.11.3`（`docs/APP同步接口.md` 第 4 / 9 / 11 / 13 / 14 / 15 / 16 / 17 章）
-> 客户端：阅读Pro `1.11`（`io.legado.pro`）、安卓4.0 版 `1.11`（`io.legado.api19`）
+> 服务端依据：FnReader `3.1.4`（`docs/APP同步接口.md` 第 4 / 9 / 11 / 13 / 14 / 15 / 16 / 17 章）
+> 客户端：阅读Pro `3.1.4.1`（`io.legado.pro`）、安卓4.0 版 `3.1.4.1`（`io.legado.api19`）
 > 本文写的是**服务端接收侧**的规矩：APP 往飞牛回传什么、字段怎么填、什么会被拒、什么会被合并。
 
 ## 0 通用约定
@@ -566,3 +566,16 @@ return /(bus[-_]?debug|busmon|\bmonitor\b|\bmock\b|\bfake\b|\be2e\b|\bdebug\b)/i
 - 三包 `aapt2 badging` 均为 `versionCode='3001001' versionName='3.0.10.1'`，无 `application-debuggable`
 - 三包 `apksigner`：Pro v2 true（minSdk 24 下 v1 false 正常），A4 v1/v2 均 true，证书 `CN=FnReader YueDu`
 - 三包包内 `assets/updateLog.md` 首条为 `**2026/11/22（3.0.10.1）**`
+
+## 23 服务端 3.1.4 与书源 404 退避（2026-11-22，3.1.4.1）
+
+服务端 `3.1.0 → 3.1.4`（tag/main `b230d8e`）主要改 TOC 规范化、Python 3.9 / `vendor39` 运行时、电子书扫描与书架幽灵书清理；`docs/APP同步接口.md` blob 仍为 `f4b8c9f957a1d609eb0a231123fadaa196ec5644`，`/api/m/*` 路径、字段、鉴权、超时与任务类型均未变化。
+
+`docs/软总线路由与权重.md` 新增 8 行回传解析容错说明：服务端兼容直接数组、`{chapters:[...]}`、字符串化 JSON，以及 `title|name`、`url|chapterUrl|fileUrl` 字段名；单遍扫描去重，上限 20000 章，超 1500 章走 JS。该逻辑全在服务端，客户端无需新增字段。
+
+客户端本版修复：`FnReaderAutoSync.runSources` 遇 404 不再写死 `fnReaderNoSourceSync=1` 永久跳过，改为写入 6 小时后的时间戳；同步成功后清除标记。旧值 `1` 会被 `toLongOrNull` 解析为 1970 年，自动按过期处理，服务端升级后无需重装 App。新增 `docs/客户端书源反向同步.md` 记录接口与验收步骤。
+
+- 版本号按「服务端版号 + 0.0.0.1」：服务端 `3.1.4` → 客户端 `3.1.4.1`，versionCode `3010401`
+- 客户端代码改动仅 `FnReaderAutoSync.kt` 的 404 退避逻辑；A4 保留自有 URL/菜单差异
+- 三包 `aapt2 badging` 应为 `versionCode='3010401' versionName='3.1.4.1'`，无 `application-debuggable`；`apksigner` 继续使用 `CN=FnReader YueDu` 正式证书
+- 本地构建与 MuMu 安装启动验证通过；服务端契约未变，未新增回传字段
