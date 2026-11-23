@@ -276,7 +276,7 @@ dependencies {
 
     //加解密类库,有些书源使用
     //noinspection GradleDependency,GradlePackageUpdate
-    implementation('cn.hutool:hutool-crypto:5.8.22')
+    implementation('cn.hutool:hutool-crypto:5.8.48')
 
     // API19 移植版：移除 Firebase（要求 API21+，且老设备无 GMS 会拖慢启动）
     //implementation platform('com.google.firebase:firebase-bom:32.5.0')
