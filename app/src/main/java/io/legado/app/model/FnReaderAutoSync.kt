@@ -324,12 +324,17 @@ object FnReaderAutoSync {
         }
 
         var added = 0
+        var boundLocal = 0
+        var pendingLocal = 0
         var coverFixes = 0
         var progressCount = 0
         var failed = ""
         if (toPush.isNotEmpty()) {
             runCatching {
-                added = pushBooks(base, token, toPush)
+                val r = pushBooks(base, token, toPush)
+                added = r[0]
+                boundLocal += r[1]
+                pendingLocal += r[2]
             }.onFailure { failed = FnReaderRemote.describeError(it) }
         }
         if (toCover.isNotEmpty()) {
@@ -339,7 +344,10 @@ object FnReaderAutoSync {
         }
         if (toProgress.isNotEmpty()) {
             runCatching {
-                progressCount = pushProgress(base, token, toProgress)
+                val r = pushProgress(base, token, toProgress)
+                progressCount = r[0]
+                boundLocal += r[1]
+                pendingLocal += r[2]
             }.onFailure { if (failed.isEmpty()) failed = FnReaderRemote.describeError(it) }
         }
 
@@ -347,6 +355,7 @@ object FnReaderAutoSync {
         if (added > 0) parts.add("回传新书 $added 本")
         if (progressCount > 0) parts.add("回传进度 $progressCount 本")
         if (localBooks > 0) parts.add("本地书 $localBooks 本（服务端扫描绑定）")
+        if (boundLocal > 0 || pendingLocal > 0) parts.add("已绑定 $boundLocal 本、待扫描 $pendingLocal 本")
         if (coverFixes > 0) parts.add("补封面 $coverFixes 本")
         if (skippedName > 0) parts.add("重名跳过 $skippedName 本")
         if (duplicate > 0) parts.add("本机重复 $duplicate 本")
@@ -354,17 +363,23 @@ object FnReaderAutoSync {
         return if (parts.isEmpty()) "" else "推送：" + parts.joinToString("　")
     }
 
-    private suspend fun pushBooks(base: String, token: String, books: Collection<Book>): Int {
+    /** 返回 [added, bound, pending]；bound/pending 自服务端 3.4.1（§17.2.2）起返回，老服务端缺省 0 */
+    private suspend fun pushBooks(base: String, token: String, books: Collection<Book>): IntArray {
         var added = 0
+        var bound = 0
+        var pending = 0
         for (batch in books.chunked(20)) {
             val arr = JSONArray()
             batch.forEach { arr.put(bookJson(it)) }
             val payload = JSONObject().apply { put("books", arr) }.toString()
             val r = FnReaderRemote.fetch("POST", "$base/api/m/books", token, payload, 60000)
             if (r.first !in 200..299) throw IllegalStateException(FnReaderRemote.explainCode(r.first, r.second))
-            added += runCatching { JSONObject(r.second).optInt("added") }.getOrDefault(0)
+            val obj = runCatching { JSONObject(r.second) }.getOrNull()
+            added += obj?.optInt("added") ?: 0
+            bound += obj?.optInt("bound") ?: 0
+            pending += obj?.optInt("pending") ?: 0
         }
-        return added
+        return intArrayOf(added, bound, pending)
     }
 
     /** 清单 §5：独立封面上传接口，data 为 data:image/...;base64, 形式 */
@@ -389,12 +404,14 @@ object FnReaderAutoSync {
         return ok
     }
 
-    /** 只推水位之后变过的进度；成功后把水位推进到本批最大 durChapterTime */
-    private suspend fun pushProgress(base: String, token: String, books: Collection<Book>): Int {
+    /** 只推水位之后变过的进度；成功后把水位推进到本批最大 durChapterTime。返回 [updated, bound, pending] */
+    private suspend fun pushProgress(base: String, token: String, books: Collection<Book>): IntArray {
         val last = appCtx.getPrefString(KEY_PROGRESS_SYNCED, "0")?.toLongOrNull() ?: 0L
         val changed = books.filter { it.durChapterTime > last }
-        if (changed.isEmpty()) return 0
+        if (changed.isEmpty()) return intArrayOf(0, 0, 0)
         var updated = 0
+        var bound = 0
+        var pending = 0
         var maxTime = last
         for (batch in changed.chunked(50)) {
             val items = JSONArray()
@@ -416,10 +433,13 @@ object FnReaderAutoSync {
             val payload = JSONObject().apply { put("items", items) }.toString()
             val r = FnReaderRemote.fetch("POST", "$base/api/m/progress/batch", token, payload, 60000)
             if (r.first !in 200..299) throw IllegalStateException(FnReaderRemote.explainCode(r.first, r.second))
-            updated += runCatching { JSONObject(r.second).optInt("updated", batch.size) }.getOrDefault(batch.size)
+            val obj = runCatching { JSONObject(r.second) }.getOrNull()
+            updated += obj?.optInt("updated", batch.size) ?: batch.size
+            bound += obj?.optInt("bound") ?: 0
+            pending += obj?.optInt("pending") ?: 0
         }
         appCtx.putPrefString(KEY_PROGRESS_SYNCED, maxTime.toString())
-        return updated
+        return intArrayOf(updated, bound, pending)
     }
 
     private suspend fun bookJson(book: Book): JSONObject {

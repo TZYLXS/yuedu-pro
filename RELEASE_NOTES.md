@@ -1,24 +1,26 @@
-# 阅读Pro 3.4.0.1
+# 阅读Pro 3.4.2.1
 
-同步 FnReader `v3.4.0`（main `d2e059f`，2026-11-27）。两仓共用版号 `3.4.0.1` / versionCode `3400001`。
+同步 FnReader `v3.4.1`（main `fa03949`，线上服务端实际运行 `3.4.2`，API 与 3.4.1 一致）。两仓共用版号 `3.4.2.1` / versionCode `3400201`。
 
-## 本版性质
-仅同步服务端版本，**无客户端代码改动**：`docs/APP同步接口.md`、`docs/软总线路由与权重.md`、`docs/AI构建指南.md` 与 `3.3.5` 完全一致，`/api/m/*` 契约未变。
+## 跟进的协议变更（§17.2.2 本地小说文件绑定，3.4.1+）
+- `/api/m/books` 与 `/api/m/progress/batch` 都接受 `localFile=true` 或非 http 的 `bookUrl`，按 `fileName || name` 查 ebook 索引（忽略扩展名/书名号，先精确后模糊）
+- 命中 → 绑 `ebook://<sha1>`（`localEbook{sha1,format,name,status}`、`contentSource=local`、`tocUrl=ebook://sha1`，目录取本地解析结果、进度用本次上报值）
+- 未命中 → 登记 `local://<normBookName>` pending（带 `sourceFileName`），电子书扫描完成后 12 秒内二次联动，命中同名电子书自动升级为 `ebook://` 并保留进度
+- 响应 `{ok, added, updated, bound, pending, skippedDeleted, total}`；`bound` 为本轮绑定成功数、`pending` 为待扫描数
 
-## 服务端 3.4.0 变化
-- 随包内置 Node 运行时 v22.12.0（按 `bin/node` 布局优先使用），manifest 去掉 `nodejs_v26` 依赖，彻底避免「未找到 node.js v26」
-- 正文兜底与替换规则误伤保护：替换后正文明显缩水（<55%）时本章回退原文
-- 封面链路：客户端封面优先，按请求 Host 返回绝对地址，死链过滤
-- 书源同步：分页 `nextSince` 与类型/布尔规范化
-- 软总线：设备计数与负载均衡、搜索优先手机与分批扫描
+## 客户端改动
+- `FnReaderAutoSync.pushBooks` / `pushProgress` 返回值改为 `[added|updated, bound, pending]`，回传摘要新增「已绑定 N 本、待扫描 M 本」
+- 老服务端（≤3.4.0）不返回这两个字段，按缺省 0 处理，原有回传逻辑不变
+- 本地书 `bookUrl` 继续用 `file://`：服务端每次按 `fileName` 重新绑定，幂等不重复建书
+- 书源同步分页（`nextSince`/`truncated`）与 `pull` 字段级合并沿用 3.3.5.1
 
-## 客户端沿用能力（3.3.5.1 已落地）
-- 书源同步分页循环（`nextSince`/`truncated`，最多 10 轮）
-- `pull` 字段级合并：规则取服务端，`enabled`/`enabledExplore`/`enabledCookieJar`/`customOrder`/`respondTime`/`bookSourceGroup` 保留本地，`lastUpdateTime` 取较大值
-- 本地书回传：`/api/m/books`、`/api/m/progress`、`/api/m/progress/batch` 带 `localFile=true` 与 `fileName`，供服务端扫 ebook 目录绑定
+## 服务端 3.4.0/3.4.2 同期变化
+- 内置 Node 运行时 v22.12.0（按 `bin/node` 布局优先），去掉 `nodejs_v26` 依赖
+- 正文替换误伤保护：替换后正文缩水 <55% 时本章回退原文
+- 封面客户端优先、死链过滤；书源同步分页与类型规范化；软总线设备计数与负载均衡
 
 ## 产物
-- `yuedu_pro_app_3.4.0.1-arm64.apk`（arm64-v8a）
-- `yuedu_pro_app_3.4.0.1-armv7.apk`（armeabi-v7a）
+- `yuedu_pro_app_3.4.2.1-arm64.apk`（arm64-v8a）
+- `yuedu_pro_app_3.4.2.1-armv7.apk`（armeabi-v7a）
 
 包名 `io.legado.pro`，minSdk 24 / targetSdk 33，正式签名（v2），无 debuggable。
