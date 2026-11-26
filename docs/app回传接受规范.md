@@ -1,7 +1,7 @@
 # APP 回传接受规范
 
 > 服务端依据：FnReader `3.4.2`（`docs/APP同步接口.md` 第 4 / 8.3.2 / 9 / 11 / 13 / 14 / 15 / 16 / 17 章，含 §17.2.1、§17.2.2）
-> 客户端：阅读Pro `3.4.2.1`（`io.legado.pro`）、安卓4.0 版 `3.4.2.1`（`io.legado.api19`）
+> 客户端：阅读Pro `3.4.2.2`（`io.legado.pro`）、安卓4.0 版 `3.4.2.2`（`io.legado.api19`）
 > 本文写的是**服务端接收侧**的规矩：APP 往飞牛回传什么、字段怎么填、什么会被拒、什么会被合并。
 
 ## 0 通用约定
@@ -622,3 +622,13 @@ return /(bus[-_]?debug|busmon|\bmonitor\b|\bmock\b|\bfake\b|\be2e\b|\bdebug\b)/i
 - 版本号按「服务端版号 + 0.0.0.1」：服务端 `3.4.2` → 客户端 `3.4.2.1`，versionCode `3400201`
 - 三包 `aapt2 badging` 应为 `versionCode='3400201' versionName='3.4.2.1'`，无 `application-debuggable`；`apksigner` 继续 `CN=FnReader YueDu` 正式证书
 - 三包包内 `assets/updateLog.md` 首条应为 `**2026/11/27（3.4.2.1）**`
+## 28 客户端 3.4.2.2（2026-11-27）：修应用内「检查更新」
+
+- 现象：旧版（3.2.0.1 / 3.3.5.1）点 `检查更新` 恒提示「已是最新版本」；MuMu + 3.2.0.1 原包实测复现（清数据后仍复现，排除 HTTP 缓存）
+- 根因：`AppUpdateGitHub.versionCodeOf()` 用 `次版本*10000`，`app/build.gradle` 的 versionCode 用 `次版本*100000`：
+  `v3.4.2.1` → 解析 `3040201`（真实 `3400201`）、`v3.2.0.1` → `3020001`（真实 `3200001`），恒小于当前 versionCode
+- 修复：`大版本*1000000 + 次版本*100000 + 修订*100 + 构建`，三段 tag 按修订位补齐；与 `build.gradle` 完全同口径（Pro / A4 同改）
+- 验证口径：`versionCodeOf("v3.4.2.1") = 3400201`、`3.0.10.1 = 3001001`，均与历史 `versionCode` 一致；json-path 2.8.0 探针与真机实测双重确认
+- 版本：服务端仍 `3.4.2`，客户端 `3.4.2.2` / `3400202`
+- 已知限制：≤3.4.2.1 的存量机器因老公式错误无法自更新到本版，需手动下载一次；本版起恢复
+- 三包校验：`aapt2 badging` 应为 `versionCode='3400202' versionName='3.4.2.2'`，无 `application-debuggable`；包内 `assets/updateLog.md` 首条 `**2026/11/27（3.4.2.2）**`

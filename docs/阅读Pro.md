@@ -13,7 +13,7 @@ room 2.6.0 / okhttp 4.11.0 / compileSdk 34）在 JDK 17 上可稳定构建，且
 | `app/build.gradle` | `applicationId` → `io.legado.pro`（与官方版、API19 版共存） |
 | `app/build.gradle` | `minSdk 19 → 24`，`targetSdk 30 → 33` |
 | `app/build.gradle` | 新增 `-PtargetAbi=armv7/arm64` 开关，决定 `abiFilters` 与产物名后缀 |
-| `app/build.gradle` | `versionCode 19001 → 3400201`（当前 3.4.2.1），输出名 `${appName}_${flavor}_${version}${abiSuffix}.apk` |
+| `app/build.gradle` | `versionCode 19001 → 3400202`（当前 3.4.2.2），输出名 `${appName}_${flavor}_${version}${abiSuffix}.apk` |
 | `modules/book`、`modules/rhino1.7.3` | `minSdk 24`、`targetSdk 33`，与主模块一致 |
 | `res/values*/strings.xml` | `app_name` → 阅读Pro（含 zh / zh-HK / zh-TW 三个语言目录） |
 | `AndroidManifest.xml` | 删除 `<uses-sdk tools:overrideLibrary=...>`（三方库 minSdk 21 < 24，合并无需 override） |
@@ -74,6 +74,15 @@ DEX：6 个（`classes.dex` ~8.6MB、`classes2.dex` 仅 2.9KB、`classes3.dex` ~
 - **真机运行验证**：测试机 adb 掉线，未实测启动、搜索、阅读。接上 USB 后跑 `scripts/verify_device.bat`。
 - 应用内「检查更新」仍指向 Legado 官方仓库，换成本仓库的 Release 需要改 `AppUpdateService` 的地址。
 - 未做混淆/资源压缩（`minifyEnabled false`），体积偏大，后续可按需开启。
+
+## 3.4.2.2（versionCode 3400202）：修「检查更新」永远提示已是最新
+
+- 现象：3.2.0.1 / 3.3.5.1 等旧版在 MuMu 上复现——`检查更新` 提示「已是最新版本」，而 GitHub 最新 Release 已是 `v3.4.2.1`
+- 根因：`AppUpdateGitHub.versionCodeOf()` 把 tag 次版本乘 `10000`，而 `app/build.gradle` 的 versionCode 次版本按 `100000`（`3.4.2.1 → 3400201`、`3.2.0.1 → 3200001`）。`v3.4.2.1` 被解析成 `3040201`、`v3.2.0.1` 解析成 `3020001`，永远小于当前 versionCode → 恒判「已是最新」
+- 修复：解析公式改为 `大版本*1000000 + 次版本*100000 + 修订*100 + 构建`（三段 tag 按修订位补齐），与 `build.gradle` 完全同口径
+- 验证：用同版本 JsonPath 库（json-path 2.8.0）跑探针，`versionCodeOf("v3.4.2.1") = 3400201`，大于 `3.2.0.1`(3200001) 与 `3.3.5.1`(3300501)，能正确弹出更新
+- 版本：服务端仍为 `3.4.2`，客户端构建号顺延到 `3.4.2.2` / `3400202`
+- 已知限制：已装旧版（≤3.4.2.1）的机器因老代码公式错误无法自更新到本版，需手动下载一次；本版起自更新恢复正常
 
 ## 3.4.2.1（versionCode 3400201）：同步服务端 3.4.2，本地书绑定回执
 

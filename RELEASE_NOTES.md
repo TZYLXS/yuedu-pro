@@ -1,26 +1,32 @@
-# 阅读Pro 3.4.2.1
+# 阅读Pro 3.4.2.2
 
-同步 FnReader `v3.4.1`（main `fa03949`，线上服务端实际运行 `3.4.2`，API 与 3.4.1 一致）。两仓共用版号 `3.4.2.1` / versionCode `3400201`。
+修复应用内「检查更新」永久提示「已是最新版本」。两仓共用版号 `3.4.2.2` / versionCode `3400202`，服务端仍为 FnReader `3.4.2`（接口契约未变）。
 
-## 跟进的协议变更（§17.2.2 本地小说文件绑定，3.4.1+）
-- `/api/m/books` 与 `/api/m/progress/batch` 都接受 `localFile=true` 或非 http 的 `bookUrl`，按 `fileName || name` 查 ebook 索引（忽略扩展名/书名号，先精确后模糊）
-- 命中 → 绑 `ebook://<sha1>`（`localEbook{sha1,format,name,status}`、`contentSource=local`、`tocUrl=ebook://sha1`，目录取本地解析结果、进度用本次上报值）
-- 未命中 → 登记 `local://<normBookName>` pending（带 `sourceFileName`），电子书扫描完成后 12 秒内二次联动，命中同名电子书自动升级为 `ebook://` 并保留进度
-- 响应 `{ok, added, updated, bound, pending, skippedDeleted, total}`；`bound` 为本轮绑定成功数、`pending` 为待扫描数
+## 问题现象
+- 3.2.0.1、3.3.5.1 等版本点「检查更新」，Toast 恒为「已是最新版本」，而 GitHub 最新 Release 已是 `v3.4.2.1`
+- MuMu 装 3.2.0.1 原包实测复现；`pm clear` 清空数据后仍复现，排除 HTTP 缓存因素
 
-## 客户端改动
-- `FnReaderAutoSync.pushBooks` / `pushProgress` 返回值改为 `[added|updated, bound, pending]`，回传摘要新增「已绑定 N 本、待扫描 M 本」
-- 老服务端（≤3.4.0）不返回这两个字段，按缺省 0 处理，原有回传逻辑不变
-- 本地书 `bookUrl` 继续用 `file://`：服务端每次按 `fileName` 重新绑定，幂等不重复建书
-- 书源同步分页（`nextSince`/`truncated`）与 `pull` 字段级合并沿用 3.3.5.1
+## 根因
+`AppUpdateGitHub.versionCodeOf(tag)` 把 tag 的次版本按 `*10000` 计算，而 `app/build.gradle` 的 versionCode 次版本按 `*100000`：
 
-## 服务端 3.4.0/3.4.2 同期变化
-- 内置 Node 运行时 v22.12.0（按 `bin/node` 布局优先），去掉 `nodejs_v26` 依赖
-- 正文替换误伤保护：替换后正文缩水 <55% 时本章回退原文
-- 封面客户端优先、死链过滤；书源同步分页与类型规范化；软总线设备计数与负载均衡
+| tag | 解析出的 code | 真实 versionCode |
+| --- | --- | --- |
+| v3.4.2.1 | 3 040 201 | 3 400 201 |
+| v3.2.0.1 | 3 020 001 | 3 200 001 |
+| v3.0.10.1 | 3 031 001 | 3 001 001 |
+
+解析值恒小于当前 versionCode，任何新版本都被判成「更旧」，于是永远提示已是最新。
+
+## 修复
+- 解析公式统一为 `大版本*1000000 + 次版本*100000 + 修订*100 + 构建`（三段 tag 按修订位补齐），与 `build.gradle` 完全同口径
+- Pro 与 A4 同步修改；A4 自有差异（`/app/legado-web`、`rawServer` 判 `/app/`、`serverBase` path 分支、`negativeButton` 文案）未动
+- 验证：用同版本 json-path 2.8.0 复算，`versionCodeOf("v3.4.2.1") = 3400201`、`3.0.10.1 = 3001001`，与历史 versionCode 全部对得上
+
+## 注意
+已装 3.4.2.1 及更早版本的机器，因旧代码公式错误无法通过应用内更新升到本版，需手动下载一次安装包；从本版起自更新恢复正常。
 
 ## 产物
-- `yuedu_pro_app_3.4.2.1-arm64.apk`（arm64-v8a）
-- `yuedu_pro_app_3.4.2.1-armv7.apk`（armeabi-v7a）
+- `yuedu_pro_app_3.4.2.2-arm64.apk`（arm64-v8a）
+- `yuedu_pro_app_3.4.2.2-armv7.apk`（armeabi-v7a）
 
 包名 `io.legado.pro`，minSdk 24 / targetSdk 33，正式签名（v2），无 debuggable。
