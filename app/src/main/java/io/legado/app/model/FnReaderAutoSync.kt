@@ -270,7 +270,7 @@ object FnReaderAutoSync {
         }
 
         val local = appDb.bookDao.all
-            .filter { it.bookUrl.isNotEmpty() && !it.bookUrl.startsWith("file:") && it.name.isNotBlank() }
+            .filter { it.bookUrl.isNotEmpty() && !isLocalFileBook(it) && it.name.isNotBlank() }
         val picked = LinkedHashMap<String, Book>()
         var duplicate = 0
         for (book in local) {
@@ -308,6 +308,21 @@ object FnReaderAutoSync {
             }
         }
 
+        // 本地书（导入的 txt/epub/pdf）：也把书名/进度推给服务端，由服务端扫 ebook 目录按文件名绑定。
+        // 老服务端会忽略非 http 的 bookUrl，只当没收到，不影响网文同步。
+        var localBooks = 0
+        val localShelf = appDb.bookDao.all.filter { isLocalFileBook(it) && it.name.isNotBlank() }
+        for (book in localShelf) {
+            if (serverUrls.contains(book.bookUrl)) {
+                toProgress.add(book)
+            } else {
+                toPush.add(book)
+                toProgress.add(book)
+                localBooks++
+                if (localCoverData(book) != null) toCover.add(book)
+            }
+        }
+
         var added = 0
         var coverFixes = 0
         var progressCount = 0
@@ -331,6 +346,7 @@ object FnReaderAutoSync {
         val parts = ArrayList<String>()
         if (added > 0) parts.add("回传新书 $added 本")
         if (progressCount > 0) parts.add("回传进度 $progressCount 本")
+        if (localBooks > 0) parts.add("本地书 $localBooks 本（服务端扫描绑定）")
         if (coverFixes > 0) parts.add("补封面 $coverFixes 本")
         if (skippedName > 0) parts.add("重名跳过 $skippedName 本")
         if (duplicate > 0) parts.add("本机重复 $duplicate 本")
@@ -390,6 +406,10 @@ object FnReaderAutoSync {
                     put("index", book.durChapterIndex)
                     put("pos", book.durChapterPos)
                     put("title", book.durChapterTitle.orEmpty())
+                    if (isLocalFileBook(book)) {
+                        put("localFile", true)
+                        put("fileName", fileNameOf(book))
+                    }
                 })
                 if (book.durChapterTime > maxTime) maxTime = book.durChapterTime
             }
@@ -410,6 +430,10 @@ object FnReaderAutoSync {
             put("author", book.author)
             put("origin", origin)
             if (originName.isNotEmpty()) put("originName", originName)
+            if (isLocalFileBook(book)) {
+                put("localFile", true)
+                put("fileName", fileNameOf(book))
+            }
             remoteCover(book.coverUrl)?.let { put("coverUrl", it) }
             localCoverData(book)?.let { (mime, data) ->
                 put("coverMime", mime)
@@ -434,6 +458,19 @@ object FnReaderAutoSync {
 
     private fun remoteCover(url: String?): String? =
         url?.trim()?.takeIf { it.startsWith("http://", true) || it.startsWith("https://", true) }
+
+    /** 导入到本机的书（txt/epub/pdf）：origin 为 loc_book，bookUrl 是本地路径或 file:/content: 方案 */
+    private fun isLocalFileBook(book: Book): Boolean =
+        book.origin == "loc_book" ||
+            book.bookUrl.startsWith("file:", true) ||
+            book.bookUrl.startsWith("content:", true)
+
+    /** 服务端扫 ebook 目录时用来对名的原文件名（带扩展名） */
+    private fun fileNameOf(book: Book): String {
+        val path = book.bookUrl.removePrefix("file://").removePrefix("file:")
+        val name = path.substringAfterLast('/').trim()
+        return if (name.isNotEmpty()) name else book.name
+    }
 
     private fun needsCoverFix(serverCover: String?): Boolean =
         serverCover.orEmpty().trim().let { it.isEmpty() || !it.contains("/api/covers/") }
@@ -658,14 +695,24 @@ object FnReaderAutoSync {
         var total = 0
         var pushed = 0
         var pushedDeleted = 0
-        val serverTime: Long
+        var serverTime = System.currentTimeMillis()
         if (changed.isEmpty() && goneUrls.isEmpty()) {
-            val r = FnReaderRemote.fetch("GET", "$base/api/m/sources/sync?since=$since", token, null, 120000)
-            if (r.first !in 200..299) throw IllegalStateException(FnReaderRemote.explainCode(r.first, r.second))
-            val obj = JSONObject(r.second)
-            pulled = mergePull(obj.optJSONArray("sources"))
-            total = obj.optInt("total")
-            serverTime = obj.optLong("serverTime", System.currentTimeMillis())
+            // §17.2.1：一次最多 500 条，truncated 时用 nextSince 继续，直到拉完
+            var cursor = since
+            var rounds = 0
+            while (true) {
+                val r = FnReaderRemote.fetch("GET", "$base/api/m/sources/sync?since=$cursor", token, null, 120000)
+                if (r.first !in 200..299) throw IllegalStateException(FnReaderRemote.explainCode(r.first, r.second))
+                val obj = JSONObject(r.second)
+                pulled += mergePull(obj.optJSONArray("sources"))
+                total = obj.optInt("total", total)
+                serverTime = obj.optLong("serverTime", serverTime)
+                rounds++
+                if (!obj.optBoolean("truncated") || rounds >= 10) break
+                val next = obj.optLong("nextSince", 0L)
+                if (next <= cursor) break
+                cursor = next
+            }
         } else {
             val payload = JSONObject().apply {
                 put("since", since)
@@ -679,10 +726,29 @@ object FnReaderAutoSync {
             val obj = JSONObject(r.second)
             pushed = changed.size
             pushedDeleted = goneUrls.size
-            pulled = mergePull(obj.optJSONArray("pull"))
-            removed = applyPullDeleted(obj.optJSONArray("pullDeleted"))
-            total = obj.optInt("total")
-            serverTime = obj.optLong("serverTime", System.currentTimeMillis())
+            pulled += mergePull(obj.optJSONArray("pull"))
+            removed += applyPullDeleted(obj.optJSONArray("pullDeleted"))
+            total = obj.optInt("total", total)
+            serverTime = obj.optLong("serverTime", serverTime)
+            // POST 的 pull 同样受 500 条限制，truncated 时继续用 GET 拉剩余
+            if (obj.optBoolean("truncated")) {
+                var cursor = obj.optLong("nextSince", serverTime)
+                var rounds = 0
+                while (rounds < 10) {
+                    val rr = FnReaderRemote.fetch("GET", "$base/api/m/sources/sync?since=$cursor", token, null, 120000)
+                    if (rr.first !in 200..299) break
+                    val o2 = JSONObject(rr.second)
+                    pulled += mergePull(o2.optJSONArray("sources"))
+                    removed += applyPullDeleted(o2.optJSONArray("pullDeleted"))
+                    total = o2.optInt("total", total)
+                    serverTime = o2.optLong("serverTime", serverTime)
+                    if (!o2.optBoolean("truncated")) break
+                    val next = o2.optLong("nextSince", 0L)
+                    if (next <= cursor) break
+                    cursor = next
+                    rounds++
+                }
+            }
         }
         appCtx.putPrefString(FnReaderConfigDialog.KEY_SOURCES_SINCE, serverTime.toString())
         saveSourceSnapshot(currentUrls)
@@ -701,14 +767,34 @@ object FnReaderAutoSync {
         )
     }
 
+    /**
+     * §17.2.1：服务端 pull 的源不做整行 REPLACE。
+     * 源定义字段以服务端为准，用户态字段（启用开关、分组、排序、响应时间）保留本地，
+     * lastUpdateTime 取双方较大值；本地改得更晚的源下一轮会重新推上去。
+     */
     private suspend fun mergePull(arr: JSONArray?): Int {
         if (arr == null) return 0
         var n = 0
         for (i in 0 until arr.length()) {
             val o = arr.optJSONObject(i) ?: continue
-            val src = runCatching { GSON.fromJson(o.toString(), BookSource::class.java) }.getOrNull() ?: continue
-            if (src.bookSourceUrl.isEmpty()) continue
-            appDb.bookSourceDao.insert(src)
+            val incoming = runCatching { GSON.fromJson(o.toString(), BookSource::class.java) }
+                .getOrNull() ?: continue
+            if (incoming.bookSourceUrl.isEmpty()) continue
+            val local = appDb.bookSourceDao.getBookSource(incoming.bookSourceUrl)
+            val merged = if (local == null) {
+                incoming
+            } else {
+                incoming.copy(
+                    bookSourceGroup = incoming.bookSourceGroup ?: local.bookSourceGroup,
+                    enabled = local.enabled,
+                    enabledExplore = local.enabledExplore,
+                    enabledCookieJar = local.enabledCookieJar ?: incoming.enabledCookieJar,
+                    customOrder = local.customOrder,
+                    respondTime = local.respondTime,
+                    lastUpdateTime = maxOf(local.lastUpdateTime, incoming.lastUpdateTime)
+                )
+            }
+            appDb.bookSourceDao.insert(merged)
             n++
         }
         return n

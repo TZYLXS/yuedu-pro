@@ -1390,6 +1390,24 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
                 }
             }
 
+            // §17.2.1：服务端单次最多回 500 条，truncated 时按 nextSince 继续拉完
+            var rounds = 0
+            while (truncated && rounds < 10) {
+                val cursor = getPrefString(KEY_SOURCES_SINCE, "0")?.toLongOrNull() ?: 0L
+                val r = request("GET", "$base/api/m/sources/sync?since=$cursor", token(), null, 120000)
+                if (r.first !in 200..299) break
+                val obj = JSONObject(r.second)
+                pulled += mergePull(obj.optJSONArray("sources"))
+                total = obj.optInt("total", total)
+                val next = obj.optLong("nextSince", 0L)
+                putPrefString(
+                    KEY_SOURCES_SINCE,
+                    obj.optLong("serverTime", System.currentTimeMillis()).toString()
+                )
+                truncated = obj.optBoolean("truncated") && next > cursor
+                rounds++
+            }
+
             // 记下这次本机有的书源地址，下一轮用它识别「本机删掉的源」
             saveSourceSnapshot(currentUrls)
 
@@ -1414,16 +1432,30 @@ class FnReaderConfigDialog : BaseDialogFragment(R.layout.dialog_fnreader_config)
         }
     }
 
-    /** 把服务端更进的源按 bookSourceUrl 覆盖回本地（§17.1 / §17.2 的 pull），返回写入条数 */
+    /** 把服务端更进的源按 bookSourceUrl 合并回本地（§17.1 / §17.2.1 的 pull），返回写入条数 */
     private suspend fun mergePull(arr: JSONArray?): Int {
         if (arr == null) return 0
         var n = 0
         for (i in 0 until arr.length()) {
             val o = arr.optJSONObject(i) ?: continue
-            val src = runCatching { GSON.fromJson(o.toString(), BookSource::class.java) }
+            val incoming = runCatching { GSON.fromJson(o.toString(), BookSource::class.java) }
                 .getOrNull() ?: continue
-            if (src.bookSourceUrl.isEmpty()) continue
-            appDb.bookSourceDao.insert(src)
+            if (incoming.bookSourceUrl.isEmpty()) continue
+            val local = appDb.bookSourceDao.getBookSource(incoming.bookSourceUrl)
+            val merged = if (local == null) {
+                incoming
+            } else {
+                incoming.copy(
+                    bookSourceGroup = incoming.bookSourceGroup ?: local.bookSourceGroup,
+                    enabled = local.enabled,
+                    enabledExplore = local.enabledExplore,
+                    enabledCookieJar = local.enabledCookieJar ?: incoming.enabledCookieJar,
+                    customOrder = local.customOrder,
+                    respondTime = local.respondTime,
+                    lastUpdateTime = maxOf(local.lastUpdateTime, incoming.lastUpdateTime)
+                )
+            }
+            appDb.bookSourceDao.insert(merged)
             n++
         }
         return n

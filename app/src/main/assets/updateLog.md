@@ -12,6 +12,16 @@
 * 正文出现缺字漏字、内容缺失、排版错乱等情况，有可能是净化规则或简繁转换出现问题。
 * 漫画源看书显示乱码，**阅读与其他软件的源并不通用**，请导入阅读的支持的漫画源！
 
+**2026/11/27（3.3.5.1）**
+
+* 同步服务端 FnReader `v3.3.5`（main `7adf7fe`）：`docs/APP同步接口.md` 新增 §17.2.1「同步细节（0.1.50+）」，`docs/软总线路由与权重.md` 补高低分设备分担口径，`/api/m/*` 无新增客户端必填字段
+* 书源同步改分页循环：从 `since` 起拉，`truncated=true` 时用 `nextSince` 继续，GET 与 POST 两条路径都拉到 `truncated=false`（服务端单次最多 500 条）
+* `pull` 落库改字段级合并，不再整行 REPLACE：源定义字段取服务端，`enabled`/`enabledExplore`/`enabledCookieJar`/`customOrder`/`respondTime`/`bookSourceGroup` 保留本地，`lastUpdateTime` 取双方较大值
+* 新增本地书回传：导入的 txt/epub/pdf（`origin=loc_book` 或 `file:`/`content:` 路径）不再被过滤，推送带 `localFile=true` 与 `fileName`，由服务端扫 ebook 目录按文件名绑定关系；老服务端会忽略这类条目，不影响网文同步
+* 服务端 3.3.0–3.3.5 变更：封面链路重构（客户端封面优先、只存相对路径、按请求 Host 返回绝对地址、死链过滤、批量刷新跳过客户端封面）、书源同步加固（时间戳相同不回传、类型与布尔规范化、坏源过滤）、软总线低分设备参与分担、正文抽取兜底（本地结果过短回退通用抽取，仍失败明确报错）
+* 版本号按服务端 `3.3.5` 对齐为 `3.3.5.1` / versionCode `3300501`
+* 校验：Pro arm64/armv7 与 A4 三包本地构建，包名/版本/签名/debuggable/包内日志静态校验通过
+
 **2026/11/23（3.2.0.1）**
 
 * 同步服务端 FnReader `v3.2.0`（main `4392041`）：`/api/m/*` 无新增客户端必填字段，`docs/APP同步接口.md` 仅补 0.1.25+ 多源缓存合并规则说明；`docs/软总线路由与权重.md`、`docs/AI构建指南.md` 未变

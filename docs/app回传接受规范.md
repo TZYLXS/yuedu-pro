@@ -1,7 +1,7 @@
 # APP 回传接受规范
 
-> 服务端依据：FnReader `3.2.0`（`docs/APP同步接口.md` 第 4 / 8.3.2 / 9 / 11 / 13 / 14 / 15 / 16 / 17 章）
-> 客户端：阅读Pro `3.2.0.1`（`io.legado.pro`）、安卓4.0 版 `3.2.0.1`（`io.legado.api19`）
+> 服务端依据：FnReader `3.3.5`（`docs/APP同步接口.md` 第 4 / 8.3.2 / 9 / 11 / 13 / 14 / 15 / 16 / 17 章，含 §17.2.1）
+> 客户端：阅读Pro `3.3.5.1`（`io.legado.pro`）、安卓4.0 版 `3.3.5.1`（`io.legado.api19`）
 > 本文写的是**服务端接收侧**的规矩：APP 往飞牛回传什么、字段怎么填、什么会被拒、什么会被合并。
 
 ## 0 通用约定
@@ -591,3 +591,13 @@ return /(bus[-_]?debug|busmon|\bmonitor\b|\bmock\b|\bfake\b|\be2e\b|\bdebug\b)/i
 - 三包 `aapt2 badging` 应为 `versionCode='3200001' versionName='3.2.0.1'`，无 `application-debuggable`；`apksigner` 继续使用 `CN=FnReader YueDu` 正式证书
 - 三包包内 `assets/updateLog.md` 首条应为 `**2026/11/23（3.2.0.1）**`
 - debug 包 MuMu 已验证：菜单打开/输入框/开关/进度框、A4 启动、阅读页、书籍详情滚动均正常
+
+## 25 服务端 3.3.5 与客户端 3.3.5.1（2026-11-27）
+
+- 上游 FnReader `v3.3.5`（main `7adf7fe`）；`docs/APP同步接口.md` 新增 §17.2.1（0.1.50+）
+- `GET /api/m/sources/sync` 与 `POST /api/m/sources/sync` 的 `sources` / `pull` 单次最多 500 条，按 `lastUpdateTime` 升序；响应带 `nextSince`、`truncated`，客户端必须循环到 `truncated=false`
+- 时间戳相等的源服务端不回传；客户端 pull 不做整行 REPLACE，改为字段级合并（保留本地启用开关、分组、排序、响应时间，`lastUpdateTime` 取双方较大值）
+- 本地书回传新增字段：`localFile: true`、`fileName`（原文件名带扩展名），随 `/api/m/books`、`/api/m/progress`、`/api/m/progress/batch` 上报；服务端应扫描 ebook 目录并 `localEbookByName(fileName || name)` 绑定关系，未命中先登记 pending
+- 版本号按「服务端版号 + 0.0.0.1」：服务端 `3.3.5` → 客户端 `3.3.5.1`，versionCode `3300501`
+- 三包 `aapt2 badging` 应为 `versionCode='3300501' versionName='3.3.5.1'`，无 `application-debuggable`；`apksigner` 继续使用 `CN=FnReader YueDu` 正式证书
+- 三包包内 `assets/updateLog.md` 首条应为 `**2026/11/27（3.3.5.1）**`
