@@ -1,7 +1,7 @@
 # APP 回传接受规范
 
-> 服务端依据：FnReader `3.3.5`（`docs/APP同步接口.md` 第 4 / 8.3.2 / 9 / 11 / 13 / 14 / 15 / 16 / 17 章，含 §17.2.1）
-> 客户端：阅读Pro `3.3.5.1`（`io.legado.pro`）、安卓4.0 版 `3.3.5.1`（`io.legado.api19`）
+> 服务端依据：FnReader `3.4.0`（`docs/APP同步接口.md` 第 4 / 8.3.2 / 9 / 11 / 13 / 14 / 15 / 16 / 17 章，含 §17.2.1）
+> 客户端：阅读Pro `3.4.0.1`（`io.legado.pro`）、安卓4.0 版 `3.4.0.1`（`io.legado.api19`）
 > 本文写的是**服务端接收侧**的规矩：APP 往飞牛回传什么、字段怎么填、什么会被拒、什么会被合并。
 
 ## 0 通用约定
@@ -600,4 +600,12 @@ return /(bus[-_]?debug|busmon|\bmonitor\b|\bmock\b|\bfake\b|\be2e\b|\bdebug\b)/i
 - 本地书回传新增字段：`localFile: true`、`fileName`（原文件名带扩展名），随 `/api/m/books`、`/api/m/progress`、`/api/m/progress/batch` 上报；服务端应扫描 ebook 目录并 `localEbookByName(fileName || name)` 绑定关系，未命中先登记 pending
 - 版本号按「服务端版号 + 0.0.0.1」：服务端 `3.3.5` → 客户端 `3.3.5.1`，versionCode `3300501`
 - 三包 `aapt2 badging` 应为 `versionCode='3300501' versionName='3.3.5.1'`，无 `application-debuggable`；`apksigner` 继续使用 `CN=FnReader YueDu` 正式证书
-- 三包包内 `assets/updateLog.md` 首条应为 `**2026/11/27（3.3.5.1）**`
+- 三包包内 `assets/updateLog.md` 首条应为 `**2026/11/27（3.3.5.1）**`## 26 服务端 3.4.0 与客户端 3.4.0.1（2026-11-27）
+
+- 上游 FnReader `v3.4.0`（main `d2e059f`）；`docs/APP同步接口.md`、`docs/软总线路由与权重.md`、`docs/AI构建指南.md` 与 `3.3.5` 逐字节一致，**客户端契约未变**
+- 服务端变化：随包内置 Node 运行时 v22.12.0（`bin/node` 布局优先，manifest 去掉 `nodejs_v26` 依赖）、正文兜底与替换规则误伤保护（替换后正文缩水 <55% 回退原文）、封面客户端优先与死链过滤、书源同步分页与类型规范化、软总线设备计数与负载均衡
+- 客户端侧无需改动：`nextSince`/`truncated` 分页、`pull` 字段级合并、本地书 `localFile`/`fileName` 回传在 3.3.5.1 已落地，3.4.0 继续沿用
+- 版本号按「服务端版号 + 0.0.0.1」：服务端 `3.4.0` → 客户端 `3.4.0.1`，versionCode `3400001`
+- 三包 `aapt2 badging` 应为 `versionCode='3400001' versionName='3.4.0.1'`，无 `application-debuggable`；`apksigner` 继续 `CN=FnReader YueDu` 正式证书
+- 三包包内 `assets/updateLog.md` 首条应为 `**2026/11/27（3.4.0.1）**`
+- 另记：运营侧服务端将上 3.4.1 并新增 §17.2.2（本地书绑定回执 `bound`/`pending`）。客户端已按 `localFile`/`fileName` 上报，服务端上线即生效；届时下一轮按 3.4.1 + 0.0.0.1 对齐发版
